@@ -17,7 +17,7 @@ Branch off `develop` using the `release/` prefix:
 ```bash
 git checkout develop
 git pull origin develop
-git checkout -b release/vX.Y.Z
+git checkout -b release/X.Y.Z
 ```
 
 ### 2. Bump the version
@@ -32,13 +32,13 @@ Commit the version bump:
 
 ```bash
 git add pyproject.toml
-git commit -m "Bump version to vX.Y.Z"
-git push -u origin release/vX.Y.Z
+git commit -m "Bump version to X.Y.Z"
+git push -u origin release/X.Y.Z
 ```
 
 ### 3. Open a pull request to main
 
-Open a PR from `release/vX.Y.Z` → `main` (not `develop` — the release goes directly to `main`).
+Open a PR from `release/X.Y.Z` → `main` (not `develop` — the release goes directly to `main`).
 
 Ensure CI passes and get the required approvals.
 
@@ -49,17 +49,17 @@ Once the PR is approved, merge it into `main` via GitHub. Then tag the merge com
 ```bash
 git checkout main
 git pull origin main
-git tag vX.Y.Z
-git push origin vX.Y.Z
+git tag X.Y.Z
+git push origin X.Y.Z
 ```
 
 ### 5. Merge back into develop
 
-Open a second PR from `release/vX.Y.Z` → `develop` on GitHub so the version bump and any last-minute fixes are not lost. Get it approved and merge.
+Open a second PR from `release/X.Y.Z` → `develop` on GitHub so the version bump and any last-minute fixes are not lost. Get it approved and merge.
 
 ### 6. Publish to PyPI
 
-Publishing happens automatically via GitHub Actions when a `v*` tag is pushed
+Publishing happens automatically via GitHub Actions when a version tag is pushed
 (see `.github/workflows/publish.yml`). The workflow uses
 [Trusted Publishers](https://docs.pypi.org/trusted-publishers/) so no API tokens
 need to be stored as secrets.
@@ -71,7 +71,7 @@ Verify the release is live at https://pypi.org/project/sre-agent/.
 Create a release on GitHub from the new tag:
 
 ```bash
-gh release create vX.Y.Z --generate-notes --title "vX.Y.Z"
+gh release create X.Y.Z --generate-notes --title "X.Y.Z"
 ```
 
 Review and edit the auto-generated notes as needed.
@@ -91,7 +91,7 @@ For urgent fixes against a release that is already published, branch off `main`:
 ```bash
 git checkout main
 git pull origin main
-git checkout -b hotfix/vX.Y.Z
+git checkout -b hotfix/X.Y.Z
 ```
 
 Follow the same process from step 2 onwards: bump version, open a PR to `main`, merge, tag, publish, create a GitHub release, and merge back into `develop`.
