@@ -1,1 +1,1 @@
-"""Init for the tests."""
+"""Tests package for the SRE Agent."""
