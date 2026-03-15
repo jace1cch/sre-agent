@@ -1,0 +1,17 @@
+[Unit]
+Description=SRE Agent Monitor Service
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/sre-agent
+Environment=PYTHONPATH=/opt/sre-agent/src
+EnvironmentFile=/etc/sre-agent.env
+ExecStart=/usr/bin/python3 -m sre_agent.cli.main monitor
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -7,29 +7,21 @@ readme = "README.md"
 requires-python = ">=3.13,<4.0"
 license = { text = "MIT" }
 dependencies = [
-    "boto3>=1.42.39",
     "click>=8.3.1",
+    "openai>=1.0.0",
     "platformdirs>=4.5.1",
     "pydantic-ai>=1.51.0",
-    "pydantic-settings>=2.12.0",
     "python-dotenv>=1.2.1",
-    "questionary>=2.1.1",
-    "rich>=14.3.2",
 ]
 
 [project.scripts]
 sre-agent = "sre_agent.cli.main:main"
-sre-agent-run-tool-call-eval = "sre_agent.eval.tool_call.run:main"
-sre-agent-run-diagnosis-quality-eval = "sre_agent.eval.diagnosis_quality.run:main"
 
 [dependency-groups]
 dev = [
     "mypy>=1.19.1",
     "pre-commit>=4.5.1",
     "pytest>=9.0.2",
-]
-eval = [
-    "opik>=1.10.38",
 ]
 
 [build-system]

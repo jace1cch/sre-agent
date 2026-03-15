@@ -1,84 +1,109 @@
 """Runtime settings for the SRE Agent."""
 
-from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from functools import lru_cache
+import os
+from pathlib import Path
+from typing import Literal
 
-from sre_agent.config.paths import env_path
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-ENV_FILE_PATH = str(env_path())
-
-
-class AWSSettings(BaseSettings):
-    """AWS configuration for CloudWatch access."""
-
-    model_config = SettingsConfigDict(env_prefix="AWS_", env_file=ENV_FILE_PATH, extra="ignore")
-
-    region: str = Field(default="eu-west-2", description="AWS region")
-    access_key_id: str | None = Field(default=None, description="AWS Access Key ID")
-    secret_access_key: str | None = Field(default=None, description="AWS Secret Access Key")
-    session_token: str | None = Field(default=None, description="AWS Session Token")
+from sre_agent.config.paths import env_candidates, load_runtime_env
 
 
-class GitHubSettings(BaseSettings):
-    """GitHub configuration for MCP server via SSE."""
+class AgentSettings(BaseModel):
+    """Main runtime configuration."""
 
-    model_config = SettingsConfigDict(
-        env_prefix="GITHUB_",
-        env_file=ENV_FILE_PATH,
-        extra="ignore",
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
+    openai_base_url: str = Field(
+        default="https://api.deepseek.com",
+        alias="OPENAI_BASE_URL",
+    )
+    model: str = Field(default="deepseek-chat", alias="MODEL")
+    repository_path: str | None = Field(default=None, alias="REPOSITORY_PATH")
+
+    check_interval_seconds: int = Field(default=60, alias="CHECK_INTERVAL_SECONDS")
+    host_disk_path: str = Field(default="/", alias="HOST_DISK_PATH")
+    cpu_percent_threshold: float = Field(default=85.0, alias="CPU_PERCENT_THRESHOLD")
+    memory_available_threshold_mb: int = Field(
+        default=200,
+        alias="MEMORY_AVAILABLE_THRESHOLD_MB",
+    )
+    disk_threshold_percent: float = Field(default=85.0, alias="DISK_THRESHOLD_PERCENT")
+    load_threshold_per_core: float = Field(default=0.85, alias="LOAD_THRESHOLD_PER_CORE")
+
+    app_container_name: str = Field(default="app", alias="APP_CONTAINER_NAME")
+    app_log_since_seconds: int = Field(default=300, alias="APP_LOG_SINCE_SECONDS")
+    restart_threshold: int = Field(default=1, alias="CONTAINER_RESTART_THRESHOLD")
+    error_burst_threshold: int = Field(default=10, alias="ERROR_BURST_THRESHOLD")
+    full_gc_threshold: int = Field(default=1, alias="FULL_GC_THRESHOLD")
+    java_diag_mode: Literal["jstack", "jcmd", "sigquit"] = Field(
+        default="sigquit",
+        alias="JAVA_DIAG_MODE",
     )
 
-    # Required: cannot be empty
-    personal_access_token: str = Field(description="GitHub Personal Access Token")
-    mcp_url: str = Field(description="URL of GitHub MCP server (SSE)")
-    owner: str = Field(description="Default GitHub repository owner")
-    repo: str = Field(description="Default GitHub repository name")
-    ref: str = Field(description="Preferred GitHub ref (branch, tag, or SHA)")
-
-
-class SlackSettings(BaseSettings):
-    """Slack configuration for korotovsky/slack-mcp-server."""
-
-    model_config = SettingsConfigDict(
-        env_prefix="SLACK_",
-        env_file=ENV_FILE_PATH,
-        extra="ignore",
+    workflow_timeout_seconds: int = Field(default=300, alias="WORKFLOW_TIMEOUT_SECONDS")
+    workflow_failure_rate_threshold: float = Field(
+        default=0.2,
+        alias="WORKFLOW_FAILURE_RATE_THRESHOLD",
+    )
+    token_anomaly_threshold: int = Field(default=50000, alias="TOKEN_ANOMALY_THRESHOLD")
+    tool_failure_rate_threshold: float = Field(
+        default=0.3,
+        alias="TOOL_FAILURE_RATE_THRESHOLD",
     )
 
-    # Required: cannot be empty
-    channel_id: str = Field(description="Slack channel ID (Cxxxxxxxxxx)")
-    mcp_url: str = Field(description="URL of Slack MCP server (SSE)")
+    webhook_url: str | None = Field(default=None, alias="WEBHOOK_URL")
+    webhook_provider: Literal["generic", "feishu"] = Field(
+        default="generic",
+        alias="WEBHOOK_PROVIDER",
+    )
+    webhook_timeout_seconds: int = Field(default=10, alias="WEBHOOK_TIMEOUT_SECONDS")
 
+    auto_remediate: bool = Field(default=False, alias="AUTO_REMEDIATE")
+    log_retention_days: int = Field(default=30, alias="LOG_RETENTION_DAYS")
+    log_clean_paths: list[str] = Field(default_factory=list, alias="LOG_CLEAN_PATHS")
+    workflow_cancel_url: str | None = Field(default=None, alias="WORKFLOW_CANCEL_URL")
+    workflow_cancel_token: str | None = Field(default=None, alias="WORKFLOW_CANCEL_TOKEN")
 
-class AgentSettings(BaseSettings):
-    """Main agent configuration."""
-
-    model_config = SettingsConfigDict(
-        env_file=ENV_FILE_PATH,
-        env_file_encoding="utf-8",
-        extra="ignore",
+    incident_store_path: str = Field(
+        default="data/incidents.jsonl",
+        alias="INCIDENT_STORE_PATH",
     )
 
-    # LLM Provider
-    anthropic_api_key: str | None = Field(default=None, alias="ANTHROPIC_API_KEY")
-    model: str = Field(default="claude-sonnet-4-5-20250929", alias="MODEL")
+    @field_validator("log_clean_paths", mode="before")
+    @classmethod
+    def _parse_log_clean_paths(cls, value: object) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        if isinstance(value, str):
+            return [item.strip() for item in value.split(",") if item.strip()]
+        return []
 
-    # Sub-configs (required)
-    aws: AWSSettings
-    github: GitHubSettings
-    slack: SlackSettings
+
+def _read_env_file(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, raw_value = line.split("=", maxsplit=1)
+        values[key.strip()] = raw_value.strip().strip("\"").strip("'")
+    return values
 
 
+@lru_cache(maxsize=1)
 def get_settings() -> AgentSettings:
-    """Load and return the agent configuration.
+    """Load and cache the agent configuration."""
 
-    The sub-configs are automatically populated from the environment
-    thanks to pydantic-settings.
-    """
-    # We use type: ignore[call-arg] because mypy doesn't know BaseSettings
-    # will populate these fields from the environment variables.
-    return AgentSettings(
-        aws=AWSSettings(),
-        github=GitHubSettings(),  # type: ignore[call-arg]
-        slack=SlackSettings(),  # type: ignore[call-arg]
-    )
+    load_runtime_env()
+    payload: dict[str, str] = {}
+    for candidate in env_candidates():
+        if not candidate.exists():
+            continue
+        payload.update(_read_env_file(candidate))
+    payload.update(os.environ)
+    return AgentSettings(**payload)

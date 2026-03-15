@@ -1,15 +1,24 @@
 """SRE Agent core modules."""
 
-from sre_agent.core.agent import create_sre_agent, diagnose_error
-from sre_agent.core.models import ErrorDiagnosis, LogEntry, LogQueryResult
+from sre_agent.core.agent import (
+    build_fallback_diagnosis,
+    create_sre_agent,
+    diagnose_error,
+    diagnose_incident,
+)
+from sre_agent.core.models import ErrorDiagnosis, Incident, LogEntry, LogQueryResult, MonitorFinding
 from sre_agent.core.settings import AgentSettings, get_settings
 
 __all__ = [
-    "create_sre_agent",
-    "diagnose_error",
     "AgentSettings",
-    "get_settings",
     "ErrorDiagnosis",
+    "Incident",
     "LogEntry",
     "LogQueryResult",
+    "MonitorFinding",
+    "build_fallback_diagnosis",
+    "create_sre_agent",
+    "diagnose_error",
+    "diagnose_incident",
+    "get_settings",
 ]

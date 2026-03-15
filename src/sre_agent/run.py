@@ -1,82 +1,66 @@
-"""Run the SRE Agent to diagnose errors."""
+"""Run a single local diagnosis cycle."""
 
 import asyncio
 import logging
-import os
 import sys
 
-from dotenv import load_dotenv
+from sre_agent.config.paths import load_runtime_env
+from sre_agent.core.settings import AgentSettings, get_settings
+from sre_agent.monitor.service import MonitorService
 
-from sre_agent import diagnose_error
-from sre_agent.config.paths import env_path
+load_runtime_env()
 
-load_dotenv(env_path())
-
-# Configure logging to see tool calls and agent thoughts
 logging.basicConfig(level=logging.INFO)
-# Set pydantic_ai to INFO to see agent activity
 logging.getLogger("pydantic_ai").setLevel(logging.INFO)
 
 
-def _load_request_from_args_or_env() -> tuple[str, str, int]:
-    """Load diagnosis inputs from CLI args or environment."""
+def _load_runtime_settings() -> AgentSettings:
+    """Load runtime settings from env and optional CLI overrides."""
+
+    settings = get_settings()
+    updates: dict[str, object] = {}
+
+    if len(sys.argv) >= 2:
+        updates["app_container_name"] = sys.argv[1]
     if len(sys.argv) >= 3:
-        log_group = sys.argv[1]
-        service_name = sys.argv[2]
-        time_range_minutes = int(sys.argv[3]) if len(sys.argv) > 3 else 10
-        return log_group, service_name, time_range_minutes
+        try:
+            updates["app_log_since_seconds"] = int(sys.argv[2])
+        except ValueError as exc:
+            print("The second argument must be an integer number of seconds.")
+            raise SystemExit(1) from exc
 
-    log_group = os.getenv("LOG_GROUP", "").strip()
-    service_name = os.getenv("SERVICE_NAME", "").strip()
-    if not log_group or not service_name:
-        print("Usage: python -m sre_agent.run <log_group> <service_name> [time_range_minutes]")
-        print(
-            "Or set environment variables: LOG_GROUP, SERVICE_NAME, TIME_RANGE_MINUTES (optional)"
-        )
-        raise SystemExit(1)
-
-    raw_time_range = os.getenv("TIME_RANGE_MINUTES", "10").strip()
-    try:
-        time_range_minutes = int(raw_time_range)
-    except ValueError as exc:
-        print("TIME_RANGE_MINUTES must be an integer.")
-        raise SystemExit(1) from exc
-
-    if time_range_minutes <= 0:
-        print("TIME_RANGE_MINUTES must be greater than 0.")
-        raise SystemExit(1)
-    return log_group, service_name, time_range_minutes
+    return settings.model_copy(update=updates) if updates else settings
 
 
 async def main() -> None:
-    """Run the SRE Agent."""
-    log_group, service_name, time_range_minutes = _load_request_from_args_or_env()
+    """Run a single diagnosis cycle."""
 
-    print(f"Diagnosing errors in {log_group}")
-    print(f"Service: {service_name}")
-    print(f"Time range: last {time_range_minutes} minutes")
+    settings = _load_runtime_settings()
+    service = MonitorService(settings)
+    incident, diagnosis = await service.run_once(notify=False, remediate=False)
+
+    if incident is None:
+        print("No issues detected.")
+        return
+
+    print(f"Service: {incident.service_name}")
+    print(f"Severity: {incident.severity}")
+    print("Findings:")
+    for finding in incident.findings:
+        print(f"- {finding.severity.upper()}: {finding.summary}")
+
+    if diagnosis is None:
+        return
+
     print("-" * 60)
-
-    try:
-        result = await diagnose_error(
-            log_group=log_group,
-            service_name=service_name,
-            time_range_minutes=time_range_minutes,
-        )
-
-        print("-" * 60)
-        print("DIAGNOSIS RESULT")
-        print("-" * 60)
-        print(f"\nSummary: {result.summary}")
-        print(f"\nRoot cause: {result.root_cause}")
-
-        if result.suggested_fixes:
-            print("\nSuggested fixes:")
-            for fix in result.suggested_fixes:
-                print(f"- {fix.description}")
-    except Exception as exc:  # noqa: BLE001
-        print(f"\nFATAL ERROR: {exc}")
-        sys.exit(1)
+    print("DIAGNOSIS RESULT")
+    print("-" * 60)
+    print(f"Summary: {diagnosis.summary}")
+    print(f"Root cause: {diagnosis.root_cause}")
+    if diagnosis.suggested_fixes:
+        print("Suggested fixes:")
+        for fix in diagnosis.suggested_fixes:
+            print(f"- {fix.description}")
 
 
 if __name__ == "__main__":

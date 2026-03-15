@@ -1,19 +1,15 @@
-Diagnose errors in CloudWatch log group '{log_group}' from the last {time_range_minutes} minutes.
-Service: {service_display}
+Analyse the following incident from a Tencent Cloud Linux VM that runs a Dockerised Java application.
 
-ORDER OF OPERATIONS:
-1. Call `conversations_add_message` to start a thread in Slack.
-2. Search error logs for {service_display}.
-3. If logs found, search GitHub and diagnose.
-4. Reply to the Slack thread with the result.
+Service: {service_name}
+Observed severity: {severity}
+Repository path: {repository_path}
 
-GitHub Context:
-- Repository name: {repo}
-- Repository owner: {owner}
-- Repository ref: {ref}
-- Search and inspect code in this repository only.
+Incident evidence JSON:
+{evidence_json}
 
-Slack Context:
-- Channel ID: {channel_id}
-
-DO NOT skip step 1. Start the thread before doing anything else.
+Instructions:
+1. Identify the most likely root cause.
+2. Separate host, container, JVM, and business-level symptoms.
+3. Keep the summary concise and concrete.
+4. Suggested fixes must start with the safest practical steps.
+5. If the evidence is insufficient, say what is missing.
