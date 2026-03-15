@@ -17,6 +17,7 @@ def _build_runtime_settings(
     updates: dict[str, object] = {}
     if container_name:
         updates["app_container_name"] = container_name
+        updates["app_container_names"] = [container_name]
     if since_seconds is not None:
         updates["app_log_since_seconds"] = since_seconds
     return settings.model_copy(update=updates) if updates else settings
@@ -55,11 +56,14 @@ async def _run_monitor(once: bool, iterations: int) -> None:
 
     run_count = 0
     while max_runs is None or run_count < max_runs:
-        incident, diagnosis = await service.run_once()
-        if incident is None:
+        results = await service.run_cycle()
+        if not results:
             click.echo("No issues detected.")
         else:
-            _print_incident(incident, diagnosis)
+            for index, (incident, diagnosis) in enumerate(results):
+                if index > 0:
+                    click.echo("")
+                _print_incident(incident, diagnosis)
 
         run_count += 1
         if max_runs is not None and run_count >= max_runs:
@@ -70,11 +74,14 @@ async def _run_monitor(once: bool, iterations: int) -> None:
 async def _run_diagnosis(container_name: str | None, since_seconds: int | None) -> None:
     settings = _build_runtime_settings(container_name, since_seconds)
     service = MonitorService(settings)
-    incident, diagnosis = await service.run_once(notify=False, remediate=False)
-    if incident is None:
+    results = await service.run_cycle(notify=False, remediate=False)
+    if not results:
         click.echo("No issues detected.")
         return
-    _print_incident(incident, diagnosis)
+    for index, (incident, diagnosis) in enumerate(results):
+        if index > 0:
+            click.echo("")
+        _print_incident(incident, diagnosis)
 
 
 @click.group()

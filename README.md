@@ -144,6 +144,7 @@ cp deploy/examples/tencent-cloud-cvm-2c2g.env .env
 至少修改这些项：
 
 - `APP_CONTAINER_NAME`
+- `APP_CONTAINER_NAMES`，多个容器用逗号分隔
 - `WEBHOOK_URL`
 - `REPOSITORY_PATH`
 - `LOG_CLEAN_PATHS`
@@ -297,6 +298,7 @@ python -m sre_agent.cli.main test-notify --message "hello from sre-agent"
 #### 容器与 JVM
 
 - `APP_CONTAINER_NAME`
+- `APP_CONTAINER_NAMES`
 - `APP_LOG_SINCE_SECONDS`
 - `CONTAINER_RESTART_THRESHOLD`
 - `ERROR_BURST_THRESHOLD`
@@ -408,4 +410,3 @@ PYTHONPATH=src python -m sre_agent.cli.main monitor --once
 1. 先把 Java 业务结构化日志补齐
 2. 根据真实运行情况微调阈值
 3. 稳定后再打开自动处置
-

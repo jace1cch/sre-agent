@@ -18,13 +18,23 @@ fi
 
 echo "Checking service configuration values"
 grep '^APP_CONTAINER_NAME=' "${ENV_FILE}" || true
+grep '^APP_CONTAINER_NAMES=' "${ENV_FILE}" || true
 grep '^WEBHOOK_URL=' "${ENV_FILE}" || true
 
 echo "Checking container access"
-container_name="$(grep '^APP_CONTAINER_NAME=' "${ENV_FILE}" | cut -d'=' -f2- | tr -d '"' || true)"
-if [ -n "${container_name}" ]; then
-  docker inspect "${container_name}" >/dev/null 2>&1 && echo "Container found: ${container_name}" || echo "Container not found: ${container_name}"
+container_names="$(grep '^APP_CONTAINER_NAMES=' "${ENV_FILE}" | cut -d'=' -f2- | tr -d '"' || true)"
+if [ -z "${container_names}" ]; then
+  container_names="$(grep '^APP_CONTAINER_NAME=' "${ENV_FILE}" | cut -d'=' -f2- | tr -d '"' || true)"
 fi
+
+IFS=',' read -r -a container_array <<< "${container_names}"
+for raw_name in "${container_array[@]}"; do
+  container_name="${raw_name// /}"
+  if [ -z "${container_name}" ]; then
+    continue
+  fi
+  docker inspect "${container_name}" >/dev/null 2>&1 && echo "Container found: ${container_name}" || echo "Container not found: ${container_name}"
+done
 
 echo "Running one diagnosis cycle"
 PYTHONPATH=src "${PYTHON_BIN}" -m sre_agent.run || true

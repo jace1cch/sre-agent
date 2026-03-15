@@ -22,6 +22,7 @@ def _load_runtime_settings() -> AgentSettings:
 
     if len(sys.argv) >= 2:
         updates["app_container_name"] = sys.argv[1]
+        updates["app_container_names"] = [sys.argv[1]]
     if len(sys.argv) >= 3:
         try:
             updates["app_log_since_seconds"] = int(sys.argv[2])
@@ -37,30 +38,34 @@ async def main() -> None:
 
     settings = _load_runtime_settings()
     service = MonitorService(settings)
-    incident, diagnosis = await service.run_once(notify=False, remediate=False)
+    results = await service.run_cycle(notify=False, remediate=False)
 
-    if incident is None:
+    if not results:
         print("No issues detected.")
         return
 
-    print(f"Service: {incident.service_name}")
-    print(f"Severity: {incident.severity}")
-    print("Findings:")
-    for finding in incident.findings:
-        print(f"- {finding.severity.upper()}: {finding.summary}")
+    for index, (incident, diagnosis) in enumerate(results):
+        if index > 0:
+            print()
 
-    if diagnosis is None:
-        return
+        print(f"Service: {incident.service_name}")
+        print(f"Severity: {incident.severity}")
+        print("Findings:")
+        for finding in incident.findings:
+            print(f"- {finding.severity.upper()}: {finding.summary}")
 
-    print("-" * 60)
-    print("DIAGNOSIS RESULT")
-    print("-" * 60)
-    print(f"Summary: {diagnosis.summary}")
-    print(f"Root cause: {diagnosis.root_cause}")
-    if diagnosis.suggested_fixes:
-        print("Suggested fixes:")
-        for fix in diagnosis.suggested_fixes:
-            print(f"- {fix.description}")
+        if diagnosis is None:
+            continue
+
+        print("-" * 60)
+        print("DIAGNOSIS RESULT")
+        print("-" * 60)
+        print(f"Summary: {diagnosis.summary}")
+        print(f"Root cause: {diagnosis.root_cause}")
+        if diagnosis.suggested_fixes:
+            print("Suggested fixes:")
+            for fix in diagnosis.suggested_fixes:
+                print(f"- {fix.description}")
 
 
 if __name__ == "__main__":

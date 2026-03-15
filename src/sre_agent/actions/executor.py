@@ -29,7 +29,8 @@ class ActionExecutor:
             )
 
         if "container_oom_killed" in findings_by_code:
-            actions.append(restart_container(self.settings.app_container_name))
+            container_name = incident.evidence.container.name if incident.evidence.container else incident.service_name
+            actions.append(restart_container(container_name))
 
         stuck_finding = findings_by_code.get("workflow_stuck")
         if stuck_finding is not None:
