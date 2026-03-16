@@ -44,7 +44,7 @@ class AgentSettings(BaseModel):
     prometheus_timeout_seconds: int = Field(default=5, alias="PROMETHEUS_TIMEOUT_SECONDS")
     prometheus_step_seconds: int = Field(default=60, alias="PROMETHEUS_STEP_SECONDS")
     graph_enable_autonomous_loop: bool = Field(
-        default=False,
+        default=True,
         alias="GRAPH_ENABLE_AUTONOMOUS_LOOP",
     )
     graph_max_steps: int = Field(default=4, alias="GRAPH_MAX_STEPS")
@@ -59,6 +59,31 @@ class AgentSettings(BaseModel):
         default=".cache/codebase",
         alias="CODEBASE_CACHE_PATH",
     )
+    codebase_retrieval_mode: Literal["hybrid", "exact_only", "vector", "disabled", "local_text"] = Field(
+        default="hybrid",
+        alias="CODEBASE_RETRIEVAL_MODE",
+    )
+    codebase_vector_store_path: str | None = Field(
+        default=None,
+        alias="CODEBASE_VECTOR_STORE_PATH",
+    )
+    rag_database_path: str = Field(
+        default=".cache/rag/rag.db",
+        alias="RAG_DATABASE_PATH",
+    )
+    rag_embedding_model: str = Field(
+        default="BAAI/bge-small-zh-v1.5",
+        alias="RAG_EMBEDDING_MODEL",
+    )
+    rag_embedding_dimension: int = Field(
+        default=512,
+        alias="RAG_EMBEDDING_DIMENSION",
+    )
+    rag_exact_top_k: int = Field(default=8, alias="RAG_EXACT_TOP_K")
+    rag_vector_top_k: int = Field(default=8, alias="RAG_VECTOR_TOP_K")
+    rag_result_limit: int = Field(default=5, alias="RAG_RESULT_LIMIT")
+    rag_context_lines: int = Field(default=5, alias="RAG_CONTEXT_LINES")
+    rag_exact_weight: float = Field(default=0.7, alias="RAG_EXACT_WEIGHT")
 
     check_interval_seconds: int = Field(default=60, alias="CHECK_INTERVAL_SECONDS")
     host_disk_path: str = Field(default="/", alias="HOST_DISK_PATH")
@@ -120,6 +145,16 @@ class AgentSettings(BaseModel):
     def _parse_app_container_names(cls, value: object) -> list[str]:
         return _parse_csv_list(value)
 
+    @field_validator("codebase_retrieval_mode", mode="after")
+    @classmethod
+    def _normalise_codebase_retrieval_mode(
+        cls,
+        value: Literal["hybrid", "exact_only", "vector", "disabled", "local_text"],
+    ) -> Literal["hybrid", "exact_only", "vector", "disabled"]:
+        if value == "local_text":
+            return "exact_only"
+        return value
+
     def monitored_container_names(self) -> list[str]:
         """Return the configured container targets in monitoring order."""
 
@@ -158,4 +193,3 @@ def get_settings() -> AgentSettings:
         payload.update(_read_env_file(candidate))
     payload.update(os.environ)
     return AgentSettings(**payload)
-

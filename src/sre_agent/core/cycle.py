@@ -6,11 +6,11 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from sre_agent.core.models import ErrorDiagnosis, Incident
+from sre_agent.core.models import ErrorDiagnosis, Incident, ReasoningTraceEntry
 
 CorrelationMethod = Literal["time_window", "shared_error", "llm_inferred"]
 ToolCallStatus = Literal["planned", "completed", "failed", "skipped"]
-GraphRuntimeMode = Literal["langgraph", "fallback"]
+GraphRuntimeMode = Literal["llm_react", "fallback"]
 
 
 class ToolCallRecord(BaseModel):
@@ -23,13 +23,8 @@ class ToolCallRecord(BaseModel):
     data: dict[str, object] = Field(default_factory=dict, description="Structured tool data")
 
 
-class GraphReasoningStep(BaseModel):
-    """One reasoning step in the graph."""
-
-    step_number: int = Field(description="Step number")
-    thought: str = Field(description="Thought produced for this step")
-    action: str = Field(description="Action chosen for this step")
-    observation: str = Field(description="Observed result summary")
+class GraphReasoningStep(ReasoningTraceEntry):
+    """Backward-compatible alias for reasoning steps."""
 
 
 class IncidentCluster(BaseModel):

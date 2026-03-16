@@ -18,6 +18,12 @@ dependencies = [
 [project.scripts]
 sre-agent = "sre_agent.cli.main:main"
 
+[project.optional-dependencies]
+rag = [
+    "sentence-transformers>=4.1.0",
+    "sqlite-vec>=0.1.6",
+]
+
 [dependency-groups]
 dev = [
     "mypy>=1.19.1",
@@ -34,4 +40,3 @@ packages = ["src/sre_agent"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-

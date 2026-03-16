@@ -151,6 +151,8 @@ def _check_prometheus(settings: AgentSettings) -> DeploymentCheck:
 def _check_autonomous_mode(settings: AgentSettings) -> DeploymentCheck:
     """Check autonomous mode toggle."""
 
-    if settings.graph_enable_autonomous_loop:
-        return DeploymentCheck(name="autonomous_mode", status="pass", summary="Autonomous graph mode is enabled.")
-    return DeploymentCheck(name="autonomous_mode", status="warn", summary="Autonomous graph mode is disabled, so the legacy path will run instead.")
+    return DeploymentCheck(
+        name="autonomous_mode",
+        status="pass",
+        summary="Autonomous ReAct mode is the only runtime path.",
+    )

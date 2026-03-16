@@ -10,11 +10,9 @@ class AutonomousGraphState(TypedDict, total=False):
     """State shared across graph nodes."""
 
     incident: Incident
-    tool_plan: list[str]
-    next_tool_index: int
+    messages: list[dict[str, object]]
+    tool_specs: list[dict[str, object]]
     remaining_steps: int
-    current_tool_name: str | None
-    current_tool_arguments: dict[str, object]
     reasoning_steps: list[GraphReasoningStep]
     tool_calls: list[ToolCallRecord]
     final_diagnosis: ErrorDiagnosis | None

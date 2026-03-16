@@ -1,80 +1,130 @@
-"""Minimal ReAct-style autonomous workflow."""
+"""Dynamic ReAct-style autonomous workflow."""
 
-from typing import Any
+from typing import Any, Literal
+import json
 
-try:
-    from langgraph.graph import END, START, StateGraph
-except ImportError:
-    END = "__end__"
-    START = "__start__"
-    StateGraph = None
+from openai import AsyncOpenAI
+from pydantic import BaseModel, Field, model_validator
 
 from sre_agent.core.cycle import AutonomousDiagnosisResult, GraphReasoningStep, ToolCallRecord
 from sre_agent.core.models import ErrorDiagnosis, Incident, SourceAvailability, SuggestedFix
+from sre_agent.core.prompts import build_autonomous_incident_prompt, build_autonomous_system_prompt
 from sre_agent.core.settings import AgentSettings
 from sre_agent.graph.state import AutonomousGraphState
 from sre_agent.tools.registry import ToolRegistry
 
 
-def langgraph_is_available() -> bool:
-    """Return whether LangGraph is importable."""
+class ReActDecision(BaseModel):
+    """One structured decision from the dynamic ReAct loop."""
 
-    return StateGraph is not None
+    thought: str = Field(description="Visible reasoning summary for this step")
+    action: Literal["call_tool", "finish"] = Field(description="Chosen action type")
+    tool_name: str | None = Field(default=None, description="Tool to call when action is call_tool")
+    tool_arguments: dict[str, object] = Field(
+        default_factory=dict,
+        description="Arguments for the selected tool",
+    )
+    summary: str | None = Field(default=None, description="Final diagnosis summary")
+    root_cause: str | None = Field(default=None, description="Final diagnosis root cause")
+    confidence: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Confidence score between 0 and 1",
+    )
+    affected_services: list[str] = Field(
+        default_factory=list,
+        description="Affected services when the action is finish",
+    )
+    suggested_fixes: list[str] = Field(
+        default_factory=list,
+        description="Suggested fix descriptions when the action is finish",
+    )
+    related_logs: list[str] = Field(
+        default_factory=list,
+        description="Relevant logs when the action is finish",
+    )
+
+    @model_validator(mode="after")
+    def _validate_shape(self) -> "ReActDecision":
+        if self.action == "call_tool" and not self.tool_name:
+            raise ValueError("tool_name is required when action is call_tool")
+        if self.action == "finish" and (not self.summary or not self.root_cause):
+            raise ValueError("summary and root_cause are required when action is finish")
+        return self
+
+
+def langgraph_is_available() -> bool:
+    """Return whether a LangGraph runtime is used in this build."""
+
+    return False
 
 
 class AutonomousWorkflow:
-    """Run a small autonomous diagnosis workflow."""
+    """Run a dynamic ReAct diagnosis workflow."""
 
-    def __init__(self, settings: AgentSettings, tool_registry: ToolRegistry) -> None:
+    def __init__(
+        self,
+        settings: AgentSettings,
+        tool_registry: ToolRegistry,
+        llm_client: AsyncOpenAI | None = None,
+    ) -> None:
         self.settings = settings
         self.tool_registry = tool_registry
-        self._compiled_graph = self._build_graph() if langgraph_is_available() else None
+        self._client = llm_client or self._build_llm_client()
 
     async def ainvoke(self, incident: Incident) -> AutonomousDiagnosisResult:
         """Run one diagnosis workflow."""
 
+        if self._client is None:
+            raise RuntimeError(
+                "Autonomous diagnosis requires an OpenAI-compatible API key and base URL."
+            )
+
         state = self._build_initial_state(incident)
-        if self._compiled_graph is None:
-            final_state = await self._run_fallback(state)
-        else:
-            final_state = await self._compiled_graph.ainvoke(state)
+        final_state = await self._run_llm_react(state)
         return self._build_result(final_state)
 
-    def _build_initial_state(self, incident: Incident) -> AutonomousGraphState:
-        """Build the initial graph state."""
+    def _build_llm_client(self) -> AsyncOpenAI | None:
+        """Build an OpenAI-compatible async client when configured."""
 
+        if not self.settings.openai_api_key:
+            return None
+        return AsyncOpenAI(
+            api_key=self.settings.openai_api_key,
+            base_url=self.settings.openai_base_url,
+        )
+
+    def _build_initial_state(self, incident: Incident) -> AutonomousGraphState:
+        """Build the initial workflow state."""
+
+        tool_specs = self.tool_registry.describe_available_tools()
+        messages = [
+            {
+                "role": "system",
+                "content": build_autonomous_system_prompt(
+                    tool_specs,
+                    max_steps=self.settings.graph_max_steps,
+                ),
+            },
+            {
+                "role": "user",
+                "content": build_autonomous_incident_prompt(incident),
+            },
+        ]
         return {
             "incident": incident,
-            "tool_plan": self._select_tool_plan(incident),
-            "next_tool_index": 0,
+            "messages": messages,
+            "tool_specs": tool_specs,
             "remaining_steps": self.settings.graph_max_steps,
-            "current_tool_name": None,
-            "current_tool_arguments": {},
             "reasoning_steps": [],
             "tool_calls": [],
             "final_diagnosis": None,
-            "runtime_mode": "langgraph" if self._compiled_graph is not None else "fallback",
+            "runtime_mode": "llm_react",
         }
 
-    def _select_tool_plan(self, incident: Incident) -> list[str]:
-        """Build a degradation-aware tool plan."""
-
-        detectors = {finding.detector for finding in incident.findings}
-        groups: list[str] = []
-        if "host" in detectors:
-            groups.extend(["host_metrics", "metrics"])
-        if "docker" in detectors or "java" in detectors:
-            groups.extend(["logs", "jvm", "metrics"])
-        if "business" in detectors:
-            groups.extend(["business", "history", "metrics"])
-        groups.extend(["alerts", "code_context", "history"])
-
-        ordered_groups = list(dict.fromkeys(groups))
-        plan = self.tool_registry.plan_available_tools(ordered_groups)
-        return plan[: self.settings.graph_max_steps]
-
     def _tool_arguments(self, incident: Incident, tool_name: str) -> dict[str, object]:
-        """Build arguments for one tool call."""
+        """Build pragmatic default arguments for one tool call."""
 
         primary_code = incident.findings[0].code if incident.findings else "unknown"
         arguments: dict[str, object] = {
@@ -90,136 +140,226 @@ class AutonomousWorkflow:
             arguments["query"] = primary_code
         if tool_name == "query_metric_range":
             arguments["minutes"] = 15
+        if tool_name == "get_cross_container_context":
+            arguments["container_names"] = self._cross_container_targets(incident)
+            arguments["since_seconds"] = self.settings.app_log_since_seconds
         return arguments
 
-    def _build_graph(self) -> Any:
-        """Compile the LangGraph workflow when available."""
+    def _cross_container_targets(self, incident: Incident) -> list[str]:
+        """Return the best-known container scope for cross-container inspection."""
 
-        if StateGraph is None:
-            return None
+        for finding in incident.findings:
+            if finding.code != "clustered_incident":
+                continue
+            raw_containers = finding.evidence.get("containers")
+            if isinstance(raw_containers, list):
+                names = [str(value).strip() for value in raw_containers if str(value).strip()]
+                if names:
+                    return list(dict.fromkeys(names))
 
-        graph = StateGraph(AutonomousGraphState)
-        graph.add_node("plan", self._plan_node)
-        graph.add_node("execute_tool", self._execute_tool_node)
-        graph.add_node("synthesise", self._synthesise_node)
-        graph.add_edge(START, "plan")
-        graph.add_conditional_edges(
-            "plan",
-            self._route_after_plan,
-            {"execute_tool": "execute_tool", "synthesise": "synthesise"},
-        )
-        graph.add_conditional_edges(
-            "execute_tool",
-            self._route_after_execute,
-            {"plan": "plan", "synthesise": "synthesise"},
-        )
-        graph.add_edge("synthesise", END)
-        return graph.compile()
+        if "," in incident.service_name:
+            names = [part.strip() for part in incident.service_name.split(",") if part.strip()]
+            if names:
+                return list(dict.fromkeys(names))
 
-    def _route_after_plan(self, state: AutonomousGraphState) -> str:
-        """Route after planning."""
+        return self.settings.monitored_container_names()
 
-        return "execute_tool" if state.get("current_tool_name") else "synthesise"
+    async def _run_llm_react(self, state: AutonomousGraphState) -> AutonomousGraphState:
+        """Run the LLM-driven ReAct loop."""
 
-    def _route_after_execute(self, state: AutonomousGraphState) -> str:
-        """Route after tool execution."""
+        current = dict(state)
+        while int(current.get("remaining_steps", 0)) > 0:
+            decision = await self._request_decision(current["messages"])
+            if decision.action == "finish":
+                current.update(self._apply_finish_decision(current, decision))
+                return current
+            current.update(self._execute_tool_step(current, decision))
 
-        remaining_steps = int(state.get("remaining_steps", 0))
-        next_tool_index = int(state.get("next_tool_index", 0))
-        tool_plan = state.get("tool_plan", [])
-        if remaining_steps > 0 and next_tool_index < len(tool_plan):
-            return "plan"
-        return "synthesise"
-
-    def _plan_node(self, state: AutonomousGraphState) -> dict[str, object]:
-        """Select the next tool call."""
-
-        tool_plan = state.get("tool_plan", [])
-        next_tool_index = int(state.get("next_tool_index", 0))
-        reasoning_steps = list(state.get("reasoning_steps", []))
-        tool_calls = list(state.get("tool_calls", []))
-        if next_tool_index >= len(tool_plan):
-            reasoning_steps.append(
-                GraphReasoningStep(
-                    step_number=len(reasoning_steps) + 1,
-                    thought="No further tool is needed for the current framework slice.",
-                    action="finish",
-                    observation="Tool budget unused or tool plan exhausted.",
-                )
-            )
-            return {
-                "current_tool_name": None,
-                "current_tool_arguments": {},
-                "reasoning_steps": reasoning_steps,
-            }
-
-        incident = state["incident"]
-        tool_name = tool_plan[next_tool_index]
-        arguments = self._tool_arguments(incident, tool_name)
-        tool_calls.append(ToolCallRecord(name=tool_name, arguments=arguments))
-        reasoning_steps.append(
-            GraphReasoningStep(
-                step_number=len(reasoning_steps) + 1,
-                thought=f"Need more evidence for {incident.service_name}.",
-                action=f"call {tool_name}",
-                observation="Tool call planned.",
-            )
-        )
-        return {
-            "current_tool_name": tool_name,
-            "current_tool_arguments": arguments,
-            "tool_calls": tool_calls,
-            "reasoning_steps": reasoning_steps,
-        }
-
-    def _execute_tool_node(self, state: AutonomousGraphState) -> dict[str, object]:
-        """Execute the planned tool call."""
-
-        tool_name = state.get("current_tool_name")
-        arguments = dict(state.get("current_tool_arguments", {}))
-        reasoning_steps = list(state.get("reasoning_steps", []))
-        tool_calls = list(state.get("tool_calls", []))
-        if not tool_name:
-            return {"current_tool_name": None, "current_tool_arguments": {}}
-
-        result = self.tool_registry.invoke(tool_name, arguments)
-        if tool_calls:
-            last = tool_calls[-1]
-            mapped_status = "completed" if result["status"] == "completed" else "failed"
-            if result["status"] == "unavailable":
-                mapped_status = "skipped"
-            tool_calls[-1] = last.model_copy(
-                update={
-                    "status": mapped_status,
-                    "summary": result["summary"],
-                    "data": result["data"],
+        try:
+            forced_messages = list(current["messages"])
+            forced_messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "Tool budget is exhausted. You must finish now with a final diagnosis. "
+                        "Do not request another tool."
+                    ),
                 }
             )
+            decision = await self._request_decision(forced_messages)
+            if decision.action == "finish":
+                current["messages"] = forced_messages
+                current.update(self._apply_finish_decision(current, decision))
+                return current
+        except Exception:
+            pass
+
+        current.update(
+            self._synthesise_fallback_diagnosis(
+                current,
+                reason="Tool budget was exhausted before the model finished the diagnosis.",
+            )
+        )
+        return current
+
+    async def _request_decision(self, messages: list[dict[str, object]]) -> ReActDecision:
+        """Ask the configured LLM for the next ReAct decision."""
+
+        assert self._client is not None
+        try:
+            completion = await self._client.beta.chat.completions.parse(
+                model=self.settings.model,
+                messages=messages,
+                response_format=ReActDecision,
+                temperature=0,
+            )
+            message = completion.choices[0].message
+            if message.parsed is not None:
+                return message.parsed
+            content = self._message_text(message.content)
+            return ReActDecision.model_validate_json(self._extract_json_object(content))
+        except Exception:
+            completion = await self._client.chat.completions.create(
+                model=self.settings.model,
+                messages=messages,
+                response_format={"type": "json_object"},
+                temperature=0,
+            )
+            content = self._message_text(completion.choices[0].message.content)
+            return ReActDecision.model_validate_json(self._extract_json_object(content))
+
+    def _execute_tool_step(
+        self,
+        state: AutonomousGraphState,
+        decision: ReActDecision,
+    ) -> dict[str, object]:
+        """Execute one model-selected tool call and record the observation."""
+
+        tool_name = decision.tool_name or ""
+        tool_arguments = dict(decision.tool_arguments)
+        if not tool_arguments:
+            tool_arguments = self._tool_arguments(state["incident"], tool_name)
+
+        result = self.tool_registry.invoke(tool_name, tool_arguments)
+        mapped_status = "completed" if result["status"] == "completed" else "failed"
+        if result["status"] == "unavailable":
+            mapped_status = "skipped"
+
+        tool_calls = list(state.get("tool_calls", []))
+        tool_calls.append(
+            ToolCallRecord(
+                name=tool_name,
+                arguments=tool_arguments,
+                status=mapped_status,
+                summary=result["summary"],
+                data=result["data"],
+            )
+        )
+
+        reasoning_steps = list(state.get("reasoning_steps", []))
         reasoning_steps.append(
             GraphReasoningStep(
                 step_number=len(reasoning_steps) + 1,
-                thought=f"Observed output from {tool_name}.",
-                action="record observation",
+                thought=decision.thought,
+                action=f"call {tool_name}",
                 observation=result["summary"],
+                tool_name=tool_name,
+                tool_arguments=tool_arguments,
+                tool_status=mapped_status,
             )
         )
+
+        messages = list(state.get("messages", []))
+        messages.append(
+            {
+                "role": "assistant",
+                "content": json.dumps(
+                    decision.model_dump(exclude_none=True),
+                    ensure_ascii=False,
+                ),
+            }
+        )
+        messages.append(
+            {
+                "role": "user",
+                "content": (
+                    f"Tool result for {tool_name}:\n"
+                    f"{json.dumps(result, ensure_ascii=False, indent=2)}"
+                ),
+            }
+        )
+
         return {
-            "tool_calls": tool_calls,
+            "messages": messages,
             "reasoning_steps": reasoning_steps,
-            "current_tool_name": None,
-            "current_tool_arguments": {},
-            "next_tool_index": int(state.get("next_tool_index", 0)) + 1,
+            "tool_calls": tool_calls,
             "remaining_steps": max(int(state.get("remaining_steps", 0)) - 1, 0),
         }
 
-    def _synthesise_node(self, state: AutonomousGraphState) -> dict[str, object]:
-        """Build the current diagnosis from collected state."""
+    def _apply_finish_decision(
+        self,
+        state: AutonomousGraphState,
+        decision: ReActDecision,
+    ) -> dict[str, object]:
+        """Build the final diagnosis from a finish decision."""
+
+        incident = state["incident"]
+        reasoning_steps = list(state.get("reasoning_steps", []))
+        reasoning_steps.append(
+            GraphReasoningStep(
+                step_number=len(reasoning_steps) + 1,
+                thought=decision.thought,
+                action="finish",
+                observation=decision.summary or decision.root_cause or "",
+            )
+        )
+
+        completed_tools = self._completed_tool_names(state.get("tool_calls", []))
+        attempted_tools = self._called_tool_names(state.get("tool_calls", []))
+        diagnosis = ErrorDiagnosis(
+            summary=decision.summary or f"Autonomous diagnosis for {incident.service_name}",
+            root_cause=decision.root_cause or "The model did not provide a root cause.",
+            confidence=decision.confidence,
+            affected_services=decision.affected_services or [incident.service_name],
+            suggested_fixes=[
+                SuggestedFix(description=description)
+                for description in (decision.suggested_fixes or self._default_fix_texts(incident))
+            ],
+            related_logs=decision.related_logs or self._default_related_logs(incident, state.get("tool_calls", [])),
+            reasoning_trace=reasoning_steps,
+            tools_actually_called=attempted_tools,
+            react_steps=len(reasoning_steps),
+        )
+
+        messages = list(state.get("messages", []))
+        messages.append(
+            {
+                "role": "assistant",
+                "content": json.dumps(
+                    decision.model_dump(exclude_none=True),
+                    ensure_ascii=False,
+                ),
+            }
+        )
+        return {
+            "messages": messages,
+            "reasoning_steps": reasoning_steps,
+            "final_diagnosis": diagnosis,
+        }
+
+    def _synthesise_fallback_diagnosis(
+        self,
+        state: AutonomousGraphState,
+        *,
+        reason: str,
+    ) -> dict[str, object]:
+        """Build a deterministic diagnosis when the LLM path cannot finish cleanly."""
 
         incident = state["incident"]
         tool_calls = list(state.get("tool_calls", []))
-        tool_names = [call.name for call in tool_calls if call.status == "completed"]
+        tool_names = self._completed_tool_names(tool_calls)
         primary_finding = incident.findings[0] if incident.findings else None
-        root_cause = primary_finding.details if primary_finding else "No root cause inferred yet."
+        root_cause = primary_finding.details if primary_finding is not None else reason
         source_suffix = self._source_summary(incident.evidence.input_sources)
         summary = f"Autonomous diagnosis for {incident.service_name}"
         if tool_names:
@@ -228,14 +368,31 @@ class AutonomousWorkflow:
             summary += f". {source_suffix}"
         else:
             summary += "."
+
+        reasoning_steps = list(state.get("reasoning_steps", []))
+        reasoning_steps.append(
+            GraphReasoningStep(
+                step_number=len(reasoning_steps) + 1,
+                thought=reason,
+                action="finish",
+                observation=root_cause,
+            )
+        )
+
         diagnosis = ErrorDiagnosis(
             summary=summary,
             root_cause=root_cause,
             affected_services=[incident.service_name],
-            suggested_fixes=self._suggested_fixes(incident),
-            related_logs=incident.evidence.log_excerpt[:5] or [call.summary for call in tool_calls[:3]],
+            suggested_fixes=[SuggestedFix(description=text) for text in self._default_fix_texts(incident)],
+            related_logs=self._default_related_logs(incident, tool_calls),
+            reasoning_trace=reasoning_steps,
+            tools_actually_called=self._called_tool_names(tool_calls),
+            react_steps=len(reasoning_steps),
         )
-        return {"final_diagnosis": diagnosis}
+        return {
+            "reasoning_steps": reasoning_steps,
+            "final_diagnosis": diagnosis,
+        }
 
     def _source_summary(self, sources: list[SourceAvailability]) -> str:
         """Build a short summary of available and missing sources."""
@@ -249,32 +406,84 @@ class AutonomousWorkflow:
             parts.append(f"Unavailable inputs: {', '.join(missing)}")
         return "; ".join(parts)
 
-    def _suggested_fixes(self, incident: Incident) -> list[SuggestedFix]:
-        """Build small placeholder fixes for the first framework slice."""
+    def _default_fix_texts(self, incident: Incident) -> list[str]:
+        """Build pragmatic fallback suggestions from the first findings."""
 
         if not incident.findings:
-            return [SuggestedFix(description="Collect more evidence before changing the system.")]
-        fixes: list[SuggestedFix] = []
-        for finding in incident.findings[:2]:
-            fixes.append(SuggestedFix(description=f"Review finding {finding.code} and capture more evidence."))
-        return fixes
+            return ["Collect more evidence before changing the system."]
+        return [
+            f"Review finding {finding.code} and capture more evidence."
+            for finding in incident.findings[:2]
+        ]
 
-    async def _run_fallback(self, state: AutonomousGraphState) -> AutonomousGraphState:
-        """Run the graph logic without LangGraph installed."""
+    def _default_related_logs(
+        self,
+        incident: Incident,
+        tool_calls: list[ToolCallRecord],
+    ) -> list[str]:
+        """Return sensible default related log lines for the final diagnosis."""
 
-        current = dict(state)
-        while True:
-            current.update(self._plan_node(current))
-            if self._route_after_plan(current) != "execute_tool":
-                break
-            current.update(self._execute_tool_node(current))
-            if self._route_after_execute(current) != "plan":
-                break
-        current.update(self._synthesise_node(current))
-        return current
+        return incident.evidence.log_excerpt[:5] or [call.summary for call in tool_calls[:3]]
+
+    def _completed_tool_names(self, tool_calls: list[ToolCallRecord]) -> list[str]:
+        """Return completed tool names without duplicates."""
+
+        names: list[str] = []
+        for call in tool_calls:
+            if call.status != "completed":
+                continue
+            if call.name in names:
+                continue
+            names.append(call.name)
+        return names
+
+    def _called_tool_names(self, tool_calls: list[ToolCallRecord]) -> list[str]:
+        """Return attempted tool names without duplicates."""
+
+        names: list[str] = []
+        for call in tool_calls:
+            if call.name in names:
+                continue
+            names.append(call.name)
+        return names
+
+    def _message_text(self, content: Any) -> str:
+        """Normalise SDK message content to plain text."""
+
+        if content is None:
+            return ""
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts: list[str] = []
+            for item in content:
+                if isinstance(item, str):
+                    parts.append(item)
+                    continue
+                if isinstance(item, dict) and "text" in item:
+                    parts.append(str(item["text"]))
+                    continue
+                text = getattr(item, "text", None)
+                if text:
+                    parts.append(str(text))
+            return "\n".join(part for part in parts if part).strip()
+        return str(content)
+
+    def _extract_json_object(self, text: str) -> str:
+        """Extract the outermost JSON object from model output."""
+
+        cleaned = text.strip()
+        if cleaned.startswith("{") and cleaned.endswith("}"):
+            return cleaned
+
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            raise ValueError("No JSON object found in model output.")
+        return cleaned[start : end + 1]
 
     def _build_result(self, state: AutonomousGraphState) -> AutonomousDiagnosisResult:
-        """Map final graph state to the public result."""
+        """Map final state to the public autonomous result."""
 
         reasoning_steps = list(state.get("reasoning_steps", []))
         tool_calls = list(state.get("tool_calls", []))
@@ -283,8 +492,11 @@ class AutonomousWorkflow:
             incident = state["incident"]
             diagnosis = ErrorDiagnosis(
                 summary=f"Autonomous diagnosis for {incident.service_name} is incomplete.",
-                root_cause="The autonomous graph did not produce a final diagnosis.",
+                root_cause="The autonomous loop did not produce a final diagnosis.",
                 affected_services=[incident.service_name],
+                reasoning_trace=reasoning_steps,
+                tools_actually_called=self._called_tool_names(tool_calls),
+                react_steps=len(reasoning_steps),
             )
         return AutonomousDiagnosisResult(
             diagnosis=diagnosis,

@@ -1,7 +1,7 @@
 """Tool registry with degradation-aware source metadata."""
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from sre_agent.core.models import SourceAvailability, SourceState, SourceTier
 
@@ -15,6 +15,8 @@ class ToolRegistration:
 
     name: str
     handler: ToolHandler
+    description: str = ""
+    parameters_schema: dict[str, object] = field(default_factory=dict)
     source_name: str | None = None
     source_tier: SourceTier = "external"
     fallback_group: str | None = None
@@ -39,6 +41,22 @@ class ToolRegistration:
             tool_name=self.name,
         )
 
+    def tool_spec(self) -> dict[str, object]:
+        """Return prompt-friendly metadata for this tool."""
+
+        source = self.source_status()
+        return {
+            "name": self.name,
+            "description": self.description or "No tool description provided.",
+            "parameters": self.parameters_schema or {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": True,
+            },
+            "source_status": source.status if source is not None else "available",
+            "source_summary": source.summary if source is not None else "Tool availability is not constrained.",
+        }
+
 
 class ToolRegistry:
     """Register, describe, and invoke named tools."""
@@ -51,6 +69,8 @@ class ToolRegistry:
         name: str,
         handler: ToolHandler,
         *,
+        description: str = "",
+        parameters_schema: dict[str, object] | None = None,
         source_name: str | None = None,
         source_tier: SourceTier = "external",
         fallback_group: str | None = None,
@@ -62,6 +82,8 @@ class ToolRegistry:
         self._tools[name] = ToolRegistration(
             name=name,
             handler=handler,
+            description=description,
+            parameters_schema=parameters_schema or {},
             source_name=source_name,
             source_tier=source_tier,
             fallback_group=fallback_group,
@@ -78,6 +100,11 @@ class ToolRegistry:
         """Return registered tool names in insertion order."""
 
         return list(self._tools)
+
+    def get(self, name: str) -> ToolRegistration | None:
+        """Return one registered tool, if present."""
+
+        return self._tools.get(name)
 
     def describe_sources(
         self,
@@ -115,6 +142,17 @@ class ToolRegistry:
                 selected.append(candidate.name)
                 break
         return selected
+
+    def describe_available_tools(self) -> list[dict[str, object]]:
+        """Return prompt-friendly metadata for available and degraded tools."""
+
+        tools: list[dict[str, object]] = []
+        for registration in self._tools.values():
+            source = registration.source_status()
+            if source is not None and source.status not in {"available", "degraded"}:
+                continue
+            tools.append(registration.tool_spec())
+        return tools
 
     def invoke(self, name: str, arguments: dict[str, object] | None = None) -> dict[str, object]:
         """Invoke one tool safely."""

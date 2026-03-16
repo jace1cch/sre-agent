@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 
 import click
 
@@ -10,11 +11,12 @@ from sre_agent.core.settings import AgentSettings, get_settings
 from sre_agent.deployment import build_readiness_report
 from sre_agent.monitor.service import MonitorService
 
+LOGGER = logging.getLogger(__name__)
+
 
 def _build_runtime_settings(
     container_name: str | None = None,
     since_seconds: int | None = None,
-    autonomous: bool | None = None,
 ) -> AgentSettings:
     settings = get_settings()
     updates: dict[str, object] = {}
@@ -23,8 +25,6 @@ def _build_runtime_settings(
         updates["app_container_names"] = [container_name]
     if since_seconds is not None:
         updates["app_log_since_seconds"] = since_seconds
-    if autonomous is not None:
-        updates["graph_enable_autonomous_loop"] = autonomous
     return settings.model_copy(update=updates) if updates else settings
 
 
@@ -47,8 +47,8 @@ def _print_incident(incident: Incident, diagnosis: ErrorDiagnosis | None) -> Non
             click.echo(f"- {action.action}: {action.status} - {action.summary}")
 
 
-async def _run_monitor(once: bool, iterations: int, autonomous: bool | None) -> None:
-    settings = _build_runtime_settings(autonomous=autonomous)
+async def _run_monitor(once: bool, iterations: int) -> None:
+    settings = _build_runtime_settings()
     service = MonitorService(settings)
 
     max_runs: int | None
@@ -61,7 +61,16 @@ async def _run_monitor(once: bool, iterations: int, autonomous: bool | None) -> 
 
     run_count = 0
     while max_runs is None or run_count < max_runs:
-        results = await service.run_cycle()
+        try:
+            results = await service.run_cycle()
+        except Exception as exc:
+            LOGGER.exception("Monitoring cycle failed.")
+            click.echo(f"Monitoring cycle failed: {exc}")
+            run_count += 1
+            if max_runs is not None and run_count >= max_runs:
+                break
+            await asyncio.sleep(settings.check_interval_seconds)
+            continue
         if not results:
             click.echo("No issues detected.")
         else:
@@ -79,11 +88,15 @@ async def _run_monitor(once: bool, iterations: int, autonomous: bool | None) -> 
 async def _run_diagnosis(
     container_name: str | None,
     since_seconds: int | None,
-    autonomous: bool | None,
 ) -> None:
-    settings = _build_runtime_settings(container_name, since_seconds, autonomous)
+    settings = _build_runtime_settings(container_name, since_seconds)
     service = MonitorService(settings)
-    results = await service.run_cycle(notify=False, remediate=False)
+    try:
+        results = await service.run_cycle(notify=False, remediate=False)
+    except Exception as exc:
+        LOGGER.exception("Diagnosis cycle failed.")
+        click.echo(f"Diagnosis cycle failed: {exc}")
+        return
     if not results:
         click.echo("No issues detected.")
         return
@@ -124,15 +137,13 @@ def cli() -> None:
     show_default=True,
     help="Number of monitoring cycles. 0 means run forever.",
 )
-@click.option(
-    "--autonomous/--no-autonomous",
-    default=None,
-    help="Override the autonomous graph setting for this command.",
-)
-def monitor_command(once: bool, iterations: int, autonomous: bool | None) -> None:
+def monitor_command(once: bool, iterations: int) -> None:
     """Run the monitor loop."""
 
-    asyncio.run(_run_monitor(once, iterations, autonomous))
+    try:
+        asyncio.run(_run_monitor(once, iterations))
+    except Exception as exc:
+        raise click.ClickException(str(exc)) from exc
 
 
 @cli.command("diagnose")
@@ -143,19 +154,16 @@ def monitor_command(once: bool, iterations: int, autonomous: bool | None) -> Non
     type=int,
     help="Override the log lookback window in seconds.",
 )
-@click.option(
-    "--autonomous/--no-autonomous",
-    default=None,
-    help="Override the autonomous graph setting for this command.",
-)
 def diagnose_command(
     container_name: str | None,
     since_seconds: int | None,
-    autonomous: bool | None,
 ) -> None:
     """Run a single diagnosis cycle."""
 
-    asyncio.run(_run_diagnosis(container_name, since_seconds, autonomous))
+    try:
+        asyncio.run(_run_diagnosis(container_name, since_seconds))
+    except Exception as exc:
+        raise click.ClickException(str(exc)) from exc
 
 
 @cli.command("check-deploy")

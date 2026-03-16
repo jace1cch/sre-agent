@@ -11,6 +11,7 @@ from sre_agent.core.models import (
     LogEntry,
     LogQueryResult,
     MonitorFinding,
+    ReasoningTraceEntry,
 )
 from sre_agent.core.settings import AgentSettings, get_settings
 
@@ -25,6 +26,7 @@ __all__ = [
     "LogEntry",
     "LogQueryResult",
     "MonitorFinding",
+    "ReasoningTraceEntry",
     "build_fallback_diagnosis",
     "create_sre_agent",
     "diagnose_error",

@@ -258,6 +258,21 @@ def build_runtime_tool_registry(runtime: ToolRuntime) -> ToolRegistry:
     registry.register(
         "get_active_alerts",
         incident_tools.get_active_alerts,
+        description=(
+            "Read recently stored incidents for the current service to see whether this issue "
+            "is already active or recurring."
+        ),
+        parameters_schema={
+            "type": "object",
+            "properties": {
+                "service_name": {
+                    "type": "string",
+                    "description": "Service name to filter the recent incident history.",
+                }
+            },
+            "required": ["service_name"],
+            "additionalProperties": False,
+        },
         source_name="incidents_jsonl",
         source_tier="external",
         fallback_group="alerts",
@@ -267,6 +282,25 @@ def build_runtime_tool_registry(runtime: ToolRuntime) -> ToolRegistry:
     registry.register(
         "query_metric_range",
         prometheus.query_metric_range,
+        description=(
+            "Query a Prometheus range metric for the relevant service when Prometheus is configured."
+        ),
+        parameters_schema={
+            "type": "object",
+            "properties": {
+                "service_name": {"type": "string"},
+                "query": {
+                    "type": "string",
+                    "description": "Metric or symptom query to investigate.",
+                },
+                "minutes": {
+                    "type": "integer",
+                    "description": "Lookback window in minutes.",
+                },
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
         source_name="prometheus_api",
         source_tier="external",
         fallback_group="metrics",
@@ -276,6 +310,19 @@ def build_runtime_tool_registry(runtime: ToolRuntime) -> ToolRegistry:
     registry.register(
         "query_metric",
         prometheus.query_metric,
+        description="Query a single Prometheus metric point for the current service.",
+        parameters_schema={
+            "type": "object",
+            "properties": {
+                "service_name": {"type": "string"},
+                "query": {
+                    "type": "string",
+                    "description": "Metric or symptom query to investigate.",
+                },
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
         source_name="prometheus_api",
         source_tier="external",
         fallback_group="metrics",
@@ -285,6 +332,20 @@ def build_runtime_tool_registry(runtime: ToolRuntime) -> ToolRegistry:
     registry.register(
         "get_error_logs",
         docker_tools.get_error_logs,
+        description=(
+            "Read recent container logs and return the most relevant error, warning, and exception lines."
+        ),
+        parameters_schema={
+            "type": "object",
+            "properties": {
+                "service_name": {
+                    "type": "string",
+                    "description": "Container name to inspect.",
+                }
+            },
+            "required": ["service_name"],
+            "additionalProperties": False,
+        },
         source_name="docker_logs",
         source_tier="local",
         fallback_group="logs",
@@ -292,8 +353,54 @@ def build_runtime_tool_registry(runtime: ToolRuntime) -> ToolRegistry:
         availability_check=_docker_logs_status,
     )
     registry.register(
+        "get_cross_container_context",
+        docker_tools.get_cross_container_context,
+        description=(
+            "Collect recent logs and current state across multiple containers in the same time window. "
+            "Use this when different services may share one upstream root cause."
+        ),
+        parameters_schema={
+            "type": "object",
+            "properties": {
+                "container_names": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Container names to inspect together. Defaults to all monitored containers.",
+                },
+                "since_seconds": {
+                    "type": "integer",
+                    "description": "Optional log lookback window in seconds.",
+                },
+            },
+            "additionalProperties": False,
+        },
+        source_name="docker_logs",
+        source_tier="local",
+        fallback_group="cross_container",
+        priority=15,
+        availability_check=_docker_logs_status,
+    )
+    registry.register(
         "get_jvm_status",
         java_tools.get_jvm_status,
+        description=(
+            "Capture a JVM thread dump or status snapshot from the target Java container."
+        ),
+        parameters_schema={
+            "type": "object",
+            "properties": {
+                "service_name": {
+                    "type": "string",
+                    "description": "Container name to inspect.",
+                },
+                "mode": {
+                    "type": "string",
+                    "description": "Preferred JVM diagnostic mode such as sigquit, jstack, or jcmd.",
+                },
+            },
+            "required": ["service_name"],
+            "additionalProperties": False,
+        },
         source_name="jstack_or_sigquit",
         source_tier="runtime",
         fallback_group="jvm",
@@ -303,6 +410,21 @@ def build_runtime_tool_registry(runtime: ToolRuntime) -> ToolRegistry:
     registry.register(
         "get_disk_detail",
         get_disk_detail,
+        description="Return detailed disk usage information for the host path under investigation.",
+        parameters_schema={
+            "type": "object",
+            "properties": {
+                "disk_path": {
+                    "type": "string",
+                    "description": "Filesystem path to inspect on the host.",
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Alias for disk_path.",
+                },
+            },
+            "additionalProperties": False,
+        },
         source_name="host_metrics",
         source_tier="local",
         fallback_group="host_metrics",
@@ -312,6 +434,21 @@ def build_runtime_tool_registry(runtime: ToolRuntime) -> ToolRegistry:
     registry.register(
         "search_codebase",
         repository_tools.search_codebase,
+        description=(
+            "Search the configured local codebase with exact symbol matching first, then optional "
+            "vector retrieval, for matching identifiers, error strings, or class names."
+        ),
+        parameters_schema={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Identifier, error text, or code phrase to search for.",
+                }
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
         source_name="java_source",
         source_tier="external",
         fallback_group="code_context",
@@ -321,6 +458,21 @@ def build_runtime_tool_registry(runtime: ToolRuntime) -> ToolRegistry:
     registry.register(
         "recall_similar_incidents",
         incident_tools.recall_similar_incidents,
+        description=(
+            "Search recent incident history with exact text matching first, then optional vector "
+            "retrieval, for similar findings, services, or diagnosis summaries."
+        ),
+        parameters_schema={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Finding code, service name, or short diagnosis phrase.",
+                }
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
         source_name="incidents_jsonl",
         source_tier="external",
         fallback_group="history",
@@ -334,6 +486,20 @@ def build_runtime_tool_registry(runtime: ToolRuntime) -> ToolRegistry:
             data={"service_name": arguments.get("service_name")},
             source="business",
         ),
+        description=(
+            "Summarise the latest structured business log events for workflow, token, or tool-level symptoms."
+        ),
+        parameters_schema={
+            "type": "object",
+            "properties": {
+                "service_name": {
+                    "type": "string",
+                    "description": "Service name whose structured business logs should be summarised.",
+                }
+            },
+            "required": ["service_name"],
+            "additionalProperties": False,
+        },
         source_name="business_logs",
         source_tier="runtime",
         fallback_group="business",

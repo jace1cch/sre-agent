@@ -47,10 +47,19 @@ def test_default_model_provider_matches_deepseek() -> None:
     assert settings.openai_base_url == "https://api.deepseek.com"
 
 
-def test_graph_settings_have_safe_defaults() -> None:
-    """Graph settings default to the safe legacy path."""
+def test_graph_settings_default_to_autonomous_mode() -> None:
+    """Graph settings default to the autonomous runtime."""
 
     settings = AgentSettings(_env_file=None)
-    assert settings.graph_enable_autonomous_loop is False
+    assert settings.graph_enable_autonomous_loop is True
     assert settings.graph_max_steps == 4
     assert settings.codebase_fetch_mode == "local"
+    assert settings.codebase_retrieval_mode == "hybrid"
+
+
+def test_legacy_local_text_mode_maps_to_exact_only() -> None:
+    """Legacy local text retrieval config stays backwards compatible."""
+
+    settings = AgentSettings(_env_file=None, CODEBASE_RETRIEVAL_MODE="local_text")
+
+    assert settings.codebase_retrieval_mode == "exact_only"

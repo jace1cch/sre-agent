@@ -12,12 +12,11 @@
 
 ## 当前架构
 
-项目现在同时保留两条运行路径：
+项目现在默认使用一条运行路径：
 
-- `legacy` 路径：沿用现有 detector 的逐目标巡检逻辑
-- `autonomous` 路径：使用 ReAct + LangGraph 风格的自主诊断框架
+- `autonomous` 路径：使用 ReAct 风格的自主诊断框架
 
-默认建议在服务器上直接启用 autonomous 模式，用真实输入来源先跑一轮验证当前设计。
+当前版本不再保留 legacy 监控分支，所有巡检与诊断都会走 autonomous 路径。
 
 ## 当前能力
 
@@ -50,10 +49,11 @@
 
 ### 自主诊断框架
 
-- ReAct 风格工具调用闭环
-- 可切换的 autonomous 诊断入口
+- 动态 ReAct 风格工具调用闭环
+- LLM 按观察结果逐步决定下一步工具
 - 周期级 incident 聚合与粗粒度关联
 - 真实 tool registry
+- 运维 RAG：`ripgrep` 精确检索优先，向量检索补充
 - 代码库检索
 - 历史 incident 召回
 - 输入来源可用性建模与降级策略
@@ -176,6 +176,12 @@ cp deploy/examples/tencent-cloud-cvm-2c2g.env .env
 - `INCIDENT_STORE_PATH`
 - `PROMETHEUS_BASE_URL`，如果你已经部署了 Prometheus
 
+如果你要启用本地向量检索，还建议安装可选依赖：
+
+```bash
+pip install -e .[rag]
+```
+
 ## 部署前检查
 
 在真正启动 monitor 之前，先运行部署就绪检查：
@@ -196,7 +202,7 @@ PYTHONPATH=src python -m sre_agent.cli.main check-deploy --json
 - `/proc` 指标文件是否可用
 - Docker CLI 和 Docker daemon 是否可用
 - 配置的容器是否能被 Agent 看到
-- 当前 autonomous 模式是否启用
+- 当前 autonomous 运行前提是否满足
 - 哪些输入来源可用，哪些会降级或缺失
 
 ## 本地单次验证命令
@@ -213,16 +219,10 @@ PYTHONPATH=src python -m sre_agent.run
 PYTHONPATH=src python -m sre_agent.cli.main monitor --once
 ```
 
-### 强制启用自主模式单次巡检
-
-```bash
-PYTHONPATH=src python -m sre_agent.cli.main monitor --once --autonomous
-```
-
 ### 单次自主诊断
 
 ```bash
-PYTHONPATH=src python -m sre_agent.cli.main diagnose --autonomous
+PYTHONPATH=src python -m sre_agent.cli.main diagnose
 ```
 
 ### 测试通知
@@ -230,6 +230,14 @@ PYTHONPATH=src python -m sre_agent.cli.main diagnose --autonomous
 ```bash
 PYTHONPATH=src python -m sre_agent.cli.main test-notify --message "sre agent test"
 ```
+
+### 评估 RAG 检索
+
+```bash
+PYTHONPATH=src python -m sre_agent.rag.eval --codebase-path /path/to/your/java/codebase
+```
+
+默认 golden dataset 路径是 `data/eval/rag_golden.json`。
 
 ## 服务器部署流程
 
@@ -297,7 +305,6 @@ journalctl -u sre-agent -f
 
 ### 基本运行
 
-- `GRAPH_ENABLE_AUTONOMOUS_LOOP=true`
 - `APP_CONTAINER_NAME` 或 `APP_CONTAINER_NAMES`
 - `OPENAI_API_KEY`
 - `MODEL`
@@ -352,8 +359,8 @@ journalctl -u sre-agent -f
 如果你现在是第一次把它部署到服务器，建议按这个顺序验证：
 
 1. `check-deploy`
-2. `diagnose --autonomous`
-3. `monitor --once --autonomous`
+2. `diagnose`
+3. `monitor --once`
 4. 看 `journalctl -u sre-agent -f`
 
 这样你会很快看清：

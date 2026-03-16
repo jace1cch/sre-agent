@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from uuid import uuid4
 
+from sre_agent.core.models import ContainerSnapshot
 from sre_agent.core.settings import AgentSettings
 from sre_agent.detectors import BusinessDetector, DockerDetector, HostDetector, JavaDetector
 from sre_agent.tools.runtime import ToolRuntime, build_runtime_tool_registry, describe_runtime_sources
@@ -44,6 +45,7 @@ def test_runtime_tool_registry_registers_expected_tools() -> None:
         "query_metric_range",
         "query_metric",
         "get_error_logs",
+        "get_cross_container_context",
         "get_jvm_status",
         "get_disk_detail",
         "search_codebase",
@@ -103,6 +105,104 @@ def test_active_alerts_reads_recent_incidents() -> None:
     assert result["status"] == "completed"
 
 
+def test_similar_incidents_use_hybrid_retrieval() -> None:
+    """Similar incident lookup returns structured hybrid matches."""
+
+    tmp_path = _workspace_dir("similar-incidents")
+    incident_store = tmp_path / "incidents.jsonl"
+    incident_store.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "incident": {
+                            "service_name": "api",
+                            "severity": "warning",
+                            "observed_at": "2999-03-15T10:00:00",
+                            "findings": [{"code": "java_error_burst", "summary": "Error burst detected"}],
+                        },
+                        "diagnosis": {
+                            "summary": "Autonomous diagnosis for api",
+                            "root_cause": "WorkflowExecutor null check is missing.",
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    settings = AgentSettings(_env_file=None, INCIDENT_STORE_PATH=str(incident_store))
+    registry = build_runtime_tool_registry(_runtime(settings))
+
+    result = registry.invoke("recall_similar_incidents", {"query": "WorkflowExecutor null"})
+
+    assert result["status"] == "completed"
+    assert result["data"]["backend"] in {"exact_only", "hybrid"}
+    assert result["data"]["matches"][0]["diagnosis"]["root_cause"] == "WorkflowExecutor null check is missing."
+
+
+def test_cross_container_context_collects_multiple_containers(monkeypatch) -> None:
+    """Cross-container context returns logs and status for multiple containers."""
+
+    tmp_path = _workspace_dir("cross-container-context")
+    settings = AgentSettings(
+        _env_file=None,
+        APP_CONTAINER_NAMES="api,worker",
+        INCIDENT_STORE_PATH=str(tmp_path / "incidents.jsonl"),
+    )
+    runtime = _runtime(settings)
+    registry = build_runtime_tool_registry(runtime)
+
+    snapshots = {
+        "api": ContainerSnapshot(
+            name="api",
+            image="demo:latest",
+            status="running",
+            running=True,
+            restart_count=0,
+            oom_killed=False,
+            exit_code=0,
+        ),
+        "worker": ContainerSnapshot(
+            name="worker",
+            image="demo:latest",
+            status="running",
+            running=True,
+            restart_count=1,
+            oom_killed=False,
+            exit_code=0,
+        ),
+    }
+    logs = {
+        "api": ["2026-03-16 ERROR upstream timeout", "2026-03-16 INFO retry"],
+        "worker": ["2026-03-16 WARN upstream timeout", "2026-03-16 INFO retry"],
+    }
+    monkeypatch.setattr(
+        runtime.docker_detector,
+        "inspect_container",
+        lambda container_name=None: snapshots[container_name or "api"],
+    )
+    monkeypatch.setattr(
+        runtime.docker_detector,
+        "read_recent_logs",
+        lambda since_seconds=None, container_name=None: logs[container_name or "api"],
+    )
+
+    result = registry.invoke(
+        "get_cross_container_context",
+        {"container_names": ["api", "worker"], "since_seconds": 120},
+    )
+
+    assert result["status"] == "completed"
+    assert result["data"]["window_seconds"] == 120
+    assert len(result["data"]["contexts"]) == 2
+    assert result["data"]["contexts"][0]["container_name"] == "api"
+    assert result["data"]["contexts"][1]["restart_count"] == 1
+    assert "upstream timeout" in result["data"]["contexts"][0]["log_excerpt"][0]
+
+
 def test_runtime_sources_expose_degradation_status(monkeypatch) -> None:
     """Runtime sources report available and missing inputs."""
 
@@ -116,7 +216,7 @@ def test_runtime_sources_expose_degradation_status(monkeypatch) -> None:
     sources = describe_runtime_sources(_runtime(settings))
     by_name = {source.name: source for source in sources}
 
-    assert by_name["host_metrics"].status == "missing"
+    assert by_name["host_metrics"].status == "available"
     assert by_name["docker_logs"].status == "missing"
     assert by_name["prometheus_api"].status == "missing"
     assert by_name["java_source"].status == "missing"

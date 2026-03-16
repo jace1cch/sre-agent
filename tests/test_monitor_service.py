@@ -4,7 +4,7 @@ import asyncio
 from pathlib import Path
 from uuid import uuid4
 
-from sre_agent.core.models import ContainerSnapshot, HostSnapshot
+from sre_agent.core.models import ContainerSnapshot, ErrorDiagnosis, HostSnapshot
 from sre_agent.core.settings import AgentSettings
 from sre_agent.monitor.service import MonitorService
 
@@ -22,6 +22,16 @@ def _workspace_dir(name: str) -> Path:
     path = Path("tests/.tmp") / f"{name}-{uuid4().hex}"
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def _diagnosis_for(incident_service_name: str) -> ErrorDiagnosis:
+    """Build a deterministic diagnosis for monitor service tests."""
+
+    return ErrorDiagnosis(
+        summary=f"Autonomous diagnosis for {incident_service_name}",
+        root_cause="Synthetic diagnosis for monitor service tests.",
+        affected_services=[incident_service_name],
+    )
 
 
 def test_monitor_cycle_reports_multiple_container_incidents(monkeypatch) -> None:
@@ -84,12 +94,16 @@ def test_monitor_cycle_reports_multiple_container_incidents(monkeypatch) -> None
     )
     monkeypatch.setattr(service.java_detector, "capture_thread_dump", lambda _name=None: ["thread dump"])
     monkeypatch.setattr(service.business_detector, "analyse", lambda _lines: ([], []))
+    async def fake_diagnose_incident(incident, settings, tool_registry=None):
+        return _diagnosis_for(incident.service_name)
+
+    monkeypatch.setattr("sre_agent.monitor.service.diagnose_incident", fake_diagnose_incident)
 
     results = asyncio.run(_run_cycle(service))
 
-    assert results == [("api", "warning"), ("worker", "critical")]
+    assert results == [("api,worker", "critical")]
     stored_lines = (tmp_path / "incidents.jsonl").read_text(encoding="utf-8").splitlines()
-    assert len(stored_lines) == 2
+    assert len(stored_lines) == 1
 
 
 def test_monitor_cycle_reports_host_incident_separately(monkeypatch) -> None:
@@ -125,6 +139,10 @@ def test_monitor_cycle_reports_host_incident_separately(monkeypatch) -> None:
         lambda since_seconds=None, container_name=None: [],
     )
     monkeypatch.setattr(service.business_detector, "analyse", lambda _lines: ([], []))
+    async def fake_diagnose_incident(incident, settings, tool_registry=None):
+        return _diagnosis_for(incident.service_name)
+
+    monkeypatch.setattr("sre_agent.monitor.service.diagnose_incident", fake_diagnose_incident)
 
     results = asyncio.run(_run_cycle(service))
 
@@ -194,6 +212,10 @@ def test_autonomous_cycle_merges_related_container_incidents(monkeypatch) -> Non
     )
     monkeypatch.setattr(service.java_detector, "capture_thread_dump", lambda _name=None: ["thread dump"])
     monkeypatch.setattr(service.business_detector, "analyse", lambda _lines: ([], []))
+    async def fake_diagnose_incident(incident, settings, tool_registry=None):
+        return _diagnosis_for(incident.service_name)
+
+    monkeypatch.setattr("sre_agent.monitor.service.diagnose_incident", fake_diagnose_incident)
 
     results = asyncio.run(service.run_cycle(notify=False, remediate=False))
 
@@ -208,3 +230,38 @@ def test_autonomous_cycle_merges_related_container_incidents(monkeypatch) -> Non
     assert source_status["prometheus_api"] == "missing"
     stored_lines = (tmp_path / "incidents.jsonl").read_text(encoding="utf-8").splitlines()
     assert len(stored_lines) == 1
+
+
+def test_monitor_cycle_captures_diagnosis_failure(monkeypatch) -> None:
+    """Diagnosis failures are captured as structured incident output."""
+
+    tmp_path = _workspace_dir("monitor-diagnosis-failure")
+    settings = AgentSettings(
+        _env_file=None,
+        INCIDENT_STORE_PATH=str(tmp_path / "incidents.jsonl"),
+    )
+    service = MonitorService(settings)
+    host_snapshot = HostSnapshot(
+        hostname="host-a",
+        cpu_count=2,
+        cpu_percent=90.0,
+        load_average_1m=2.2,
+        memory_total_mb=2048,
+        memory_available_mb=128,
+        disk_path="/",
+        disk_used_percent=40.0,
+    )
+
+    monkeypatch.setattr(service.host_detector, "collect_snapshot", lambda: host_snapshot)
+    async def fake_diagnose_incident(incident, settings, tool_registry=None):
+        raise RuntimeError("synthetic agent failure")
+
+    monkeypatch.setattr("sre_agent.monitor.service.diagnose_incident", fake_diagnose_incident)
+
+    results = asyncio.run(service.run_cycle(notify=False, remediate=False))
+
+    assert len(results) == 1
+    _incident, diagnosis = results[0]
+    assert diagnosis is not None
+    assert diagnosis.summary == "Autonomous diagnosis failed for host:host-a."
+    assert "synthetic agent failure" in diagnosis.root_cause

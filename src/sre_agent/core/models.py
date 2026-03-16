@@ -35,6 +35,21 @@ class SuggestedFix(BaseModel):
     code_snippet: str | None = Field(default=None, description="Example code change")
 
 
+class ReasoningTraceEntry(BaseModel):
+    """One visible reasoning step from the autonomous loop."""
+
+    step_number: int = Field(description="Step number")
+    thought: str = Field(description="Short visible reasoning summary")
+    action: str = Field(description="Action chosen for this step")
+    observation: str = Field(default="", description="Observed result summary")
+    tool_name: str | None = Field(default=None, description="Tool used in this step")
+    tool_arguments: dict[str, object] = Field(
+        default_factory=dict,
+        description="Arguments passed to the selected tool",
+    )
+    tool_status: str | None = Field(default=None, description="Tool execution status")
+
+
 class SourceAvailability(BaseModel):
     """Availability of one input source."""
 
@@ -129,6 +144,12 @@ class ErrorDiagnosis(BaseModel):
 
     summary: str = Field(description="Brief summary of the issue")
     root_cause: str = Field(description="Identified root cause")
+    confidence: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Confidence score for the diagnosis",
+    )
     affected_services: list[str] = Field(
         default_factory=list,
         description="Services affected by this issue",
@@ -141,6 +162,15 @@ class ErrorDiagnosis(BaseModel):
         default_factory=list,
         description="Key log messages related to the issue",
     )
+    reasoning_trace: list[ReasoningTraceEntry] = Field(
+        default_factory=list,
+        description="Visible reasoning trace for the diagnosis",
+    )
+    tools_actually_called: list[str] = Field(
+        default_factory=list,
+        description="Tools actually invoked during the diagnosis",
+    )
+    react_steps: int = Field(default=0, description="Number of ReAct steps used")
     timestamp: datetime = Field(
         default_factory=datetime.now,
         description="When the diagnosis was created",

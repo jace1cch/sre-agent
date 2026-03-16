@@ -1,0 +1,122 @@
+[
+  {
+    "query": "No executor found for node type at WorkflowEngine.java",
+    "expected_files": [
+      "WorkflowEngine.java"
+    ],
+    "expected_keywords": [
+      "nodeExecutors",
+      "NodeTypeEnum",
+      "No executor found"
+    ],
+    "description": "工作流节点类型未注册，执行引擎找不到对应执行器。"
+  },
+  {
+    "query": "Invalid workflow DSL cycle detected WorkflowEngine.java",
+    "expected_files": [
+      "WorkflowEngine.java"
+    ],
+    "expected_keywords": [
+      "cycle detected",
+      "hasCycle",
+      "inDegree"
+    ],
+    "description": "工作流图存在环路，编排校验失败。"
+  },
+  {
+    "query": "Redis get tool config failed RedisService",
+    "expected_files": [
+      "RedisService.java"
+    ],
+    "expected_keywords": [
+      "redisTemplate",
+      "getToolConfig",
+      "Redis get tool config failed"
+    ],
+    "description": "工具配置从 Redis 读取失败，怀疑缓存或网络异常。"
+  },
+  {
+    "query": "Redis set tool config failed RedisService",
+    "expected_files": [
+      "RedisService.java"
+    ],
+    "expected_keywords": [
+      "setToolConfig",
+      "TimeUnit.SECONDS",
+      "Redis set tool config failed"
+    ],
+    "description": "工具配置写回 Redis 失败。"
+  },
+  {
+    "query": "Execution timeout callWithTimeLimit AsyncUtil",
+    "expected_files": [
+      "AsyncUtil.java"
+    ],
+    "expected_keywords": [
+      "callWithTimeLimit",
+      "TimeoutException",
+      "SimpleTimeLimiter"
+    ],
+    "description": "异步调用超时，怀疑公共限时执行封装触发。"
+  },
+  {
+    "query": "Tool execution failed missing payload.text Tool.java",
+    "expected_files": [
+      "Tool.java"
+    ],
+    "expected_keywords": [
+      "payload",
+      "text",
+      "Tool execution failed"
+    ],
+    "description": "工具服务返回格式异常，缺少 payload.text。"
+  },
+  {
+    "query": "Invalid response format missing header Tool.java",
+    "expected_files": [
+      "Tool.java"
+    ],
+    "expected_keywords": [
+      "missing 'header'",
+      "responseBody",
+      "Invalid response format"
+    ],
+    "description": "Link 工具调用返回体结构不符合预期。"
+  },
+  {
+    "query": "Invalid flow ID format WorkflowService flowId",
+    "expected_files": [
+      "WorkflowService.java"
+    ],
+    "expected_keywords": [
+      "Invalid flow ID format",
+      "Long.parseLong",
+      "flowId"
+    ],
+    "description": "工作流 ID 非法，接口层传入了无法转换的 flowId。"
+  },
+  {
+    "query": "Invalid workflow data format WorkflowService validateWorkflow",
+    "expected_files": [
+      "WorkflowService.java"
+    ],
+    "expected_keywords": [
+      "validateWorkflow",
+      "dslData",
+      "Invalid workflow data format"
+    ],
+    "description": "工作流 DSL 数据不合法，校验构建阶段失败。"
+  },
+  {
+    "query": "TIMEOUT_ERROR FLOW_NOT_FOUND_ERROR ErrorCode.java",
+    "expected_files": [
+      "ErrorCode.java"
+    ],
+    "expected_keywords": [
+      "TIMEOUT_ERROR",
+      "FLOW_NOT_FOUND_ERROR",
+      "WORKFLOW_EXECUTION_ERROR"
+    ],
+    "description": "定位工作流错误码定义，确认超时与流程缺失的错误枚举。"
+  }
+]

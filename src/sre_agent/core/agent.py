@@ -1,5 +1,6 @@
 """SRE Agent using pydantic-ai."""
 
+import logging
 from typing import Any
 
 try:
@@ -12,11 +13,13 @@ except ImportError:
     OpenAIProvider = None
 
 from sre_agent.core.cycle import AutonomousDiagnosisResult
-from sre_agent.core.models import ErrorDiagnosis, Incident, MonitorFinding, SuggestedFix
+from sre_agent.core.models import ErrorDiagnosis, Incident, MonitorFinding, ReasoningTraceEntry, SuggestedFix
 from sre_agent.core.prompts import SYSTEM_PROMPT, build_diagnosis_prompt
 from sre_agent.core.settings import AgentSettings, get_settings
 from sre_agent.graph.workflow import AutonomousWorkflow
 from sre_agent.tools import ToolRegistry, build_default_runtime_tool_registry
+
+LOGGER = logging.getLogger(__name__)
 
 
 def create_sre_agent(config: AgentSettings) -> Any:
@@ -99,32 +102,40 @@ async def run_autonomous_diagnosis(
     return await workflow.ainvoke(incident)
 
 
-async def diagnose_incident(
+def build_autonomous_failure_diagnosis(
     incident: Incident,
-    config: AgentSettings | None = None,
-    tool_registry: ToolRegistry | None = None,
+    exc: Exception,
 ) -> ErrorDiagnosis:
-    """Run a diagnosis for a structured incident."""
+    """Build a structured diagnosis when the autonomous agent fails."""
 
-    if config is None:
-        config = get_settings()
+    message = str(exc).strip() or exc.__class__.__name__
+    return ErrorDiagnosis(
+        summary=f"Autonomous diagnosis failed for {incident.service_name}.",
+        root_cause=(
+            "The autonomous agent raised an exception before it could finish the diagnosis. "
+            f"Error: {message}"
+        ),
+        affected_services=[incident.service_name],
+        suggested_fixes=[
+            SuggestedFix(description="Check the model API key, base URL, and network reachability."),
+            SuggestedFix(description="Inspect agent logs and rerun the diagnosis after fixing the runtime error."),
+        ],
+        related_logs=incident.evidence.log_excerpt[:10],
+        reasoning_trace=[
+            ReasoningTraceEntry(
+                step_number=1,
+                thought="Autonomous diagnosis failed before a valid next step was produced.",
+                action="finish",
+                observation=message,
+            )
+        ],
+        react_steps=1,
+    )
 
-    if config.graph_enable_autonomous_loop:
-        result = await run_autonomous_diagnosis(incident, config, tool_registry=tool_registry)
-        return result.diagnosis
 
-    if not config.openai_api_key or PydanticAgent is None:
-        return build_fallback_diagnosis(incident)
+def _normalise_diagnosis(incident: Incident, diagnosis: ErrorDiagnosis) -> ErrorDiagnosis:
+    """Ensure the public diagnosis always has the expected fields."""
 
-    agent = create_sre_agent(config)
-    prompt = build_diagnosis_prompt(config, incident)
-
-    try:
-        result = await agent.run(prompt)
-    except Exception:
-        return build_fallback_diagnosis(incident)
-
-    diagnosis = result.output
     if not diagnosis.affected_services:
         diagnosis.affected_services = [incident.service_name]
     if not diagnosis.related_logs:
@@ -135,6 +146,25 @@ async def diagnose_incident(
             for finding in _sorted_findings(incident.findings)[:3]
         ]
     return diagnosis
+
+
+async def diagnose_incident(
+    incident: Incident,
+    config: AgentSettings | None = None,
+    tool_registry: ToolRegistry | None = None,
+) -> ErrorDiagnosis:
+    """Run a diagnosis for a structured incident."""
+
+    if config is None:
+        config = get_settings()
+
+    try:
+        result = await run_autonomous_diagnosis(incident, config, tool_registry=tool_registry)
+    except Exception as exc:
+        LOGGER.exception("Autonomous diagnosis failed for %s.", incident.service_name)
+        return build_autonomous_failure_diagnosis(incident, exc)
+
+    return _normalise_diagnosis(incident, result.diagnosis)
 
 
 async def diagnose_error(

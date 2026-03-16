@@ -1,9 +1,20 @@
 """Monitoring orchestration for the SRE Agent."""
 
+import logging
+
 from sre_agent.actions import ActionExecutor
-from sre_agent.core.agent import diagnose_incident
+from sre_agent.core.agent import build_autonomous_failure_diagnosis, diagnose_incident
 from sre_agent.core.cycle import IncidentCluster, cluster_incidents
-from sre_agent.core.models import ContainerSnapshot, ErrorDiagnosis, EvidenceBundle, HostSnapshot, Incident, MonitorFinding, SourceAvailability
+from sre_agent.core.models import (
+    ActionResult,
+    ContainerSnapshot,
+    ErrorDiagnosis,
+    EvidenceBundle,
+    HostSnapshot,
+    Incident,
+    MonitorFinding,
+    SourceAvailability,
+)
 from sre_agent.core.settings import AgentSettings, get_settings
 from sre_agent.detectors import BusinessDetector, DockerDetector, HostDetector, JavaDetector
 from sre_agent.notify import WebhookNotifier
@@ -13,6 +24,7 @@ from sre_agent.tools.runtime import describe_runtime_sources
 
 SEVERITY_ORDER = {"info": 1, "warning": 2, "critical": 3}
 IncidentResult = tuple[Incident, ErrorDiagnosis | None]
+LOGGER = logging.getLogger(__name__)
 
 
 class MonitorService:
@@ -51,23 +63,7 @@ class MonitorService:
     ) -> list[IncidentResult]:
         """Run one monitoring cycle across the configured targets."""
 
-        if self.settings.graph_enable_autonomous_loop:
-            return await self._run_autonomous_cycle(notify=notify, remediate=remediate)
-        return await self._run_legacy_cycle(notify=notify, remediate=remediate)
-
-    async def _run_legacy_cycle(
-        self,
-        notify: bool,
-        remediate: bool | None,
-    ) -> list[IncidentResult]:
-        """Run the existing per-target monitoring path."""
-
-        host_snapshot = self.host_detector.collect_snapshot()
-        incidents = self._collect_cycle_incidents(host_snapshot)
-        results: list[IncidentResult] = []
-        for incident in incidents:
-            results.append(await self._finalise_incident(incident, notify=notify, remediate=remediate))
-        return results
+        return await self._run_autonomous_cycle(notify=notify, remediate=remediate)
 
     async def _run_autonomous_cycle(
         self,
@@ -263,16 +259,37 @@ class MonitorService:
     ) -> IncidentResult:
         """Diagnose, store, notify, and optionally remediate an incident."""
 
-        diagnosis = await diagnose_incident(incident, self.settings, tool_registry=tool_registry)
+        try:
+            diagnosis = await diagnose_incident(incident, self.settings, tool_registry=tool_registry)
+        except Exception as exc:
+            LOGGER.exception("Failed to diagnose incident %s.", incident.service_name)
+            diagnosis = build_autonomous_failure_diagnosis(incident, exc)
 
         should_remediate = self.settings.auto_remediate if remediate is None else remediate
         if should_remediate:
-            incident.actions = self.executor.execute(incident)
+            try:
+                incident.actions = self.executor.execute(incident)
+            except Exception as exc:
+                LOGGER.exception("Failed to execute remediation for %s.", incident.service_name)
+                incident.actions = [
+                    ActionResult(
+                        action="auto_remediate",
+                        status="failed",
+                        summary="Automatic remediation failed.",
+                        details=str(exc),
+                    )
+                ]
 
-        store_incident(incident, diagnosis, self.settings.incident_store_path)
+        try:
+            store_incident(incident, diagnosis, self.settings.incident_store_path)
+        except Exception:
+            LOGGER.exception("Failed to store incident %s.", incident.service_name)
 
         if notify:
-            self.notifier.send_incident(incident, diagnosis)
+            try:
+                self.notifier.send_incident(incident, diagnosis)
+            except Exception:
+                LOGGER.exception("Failed to notify for incident %s.", incident.service_name)
 
         return incident, diagnosis
 
