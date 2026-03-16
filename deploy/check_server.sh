@@ -20,6 +20,9 @@ echo "Checking service configuration values"
 grep '^APP_CONTAINER_NAME=' "${ENV_FILE}" || true
 grep '^APP_CONTAINER_NAMES=' "${ENV_FILE}" || true
 grep '^WEBHOOK_URL=' "${ENV_FILE}" || true
+grep '^GRAPH_ENABLE_AUTONOMOUS_LOOP=' "${ENV_FILE}" || true
+grep '^PROMETHEUS_BASE_URL=' "${ENV_FILE}" || true
+grep '^CODEBASE_PATH=' "${ENV_FILE}" || true
 
 echo "Checking container access"
 container_names="$(grep '^APP_CONTAINER_NAMES=' "${ENV_FILE}" | cut -d'=' -f2- | tr -d '"' || true)"
@@ -35,6 +38,9 @@ for raw_name in "${container_array[@]}"; do
   fi
   docker inspect "${container_name}" >/dev/null 2>&1 && echo "Container found: ${container_name}" || echo "Container not found: ${container_name}"
 done
+
+echo "Running deployment readiness report"
+PYTHONPATH=src "${PYTHON_BIN}" -m sre_agent.cli.main check-deploy || true
 
 echo "Running one diagnosis cycle"
 PYTHONPATH=src "${PYTHON_BIN}" -m sre_agent.run || true

@@ -1,17 +1,20 @@
 """CLI entrypoint for the SRE Agent."""
 
 import asyncio
+import json
 
 import click
 
 from sre_agent.core.models import ErrorDiagnosis, Incident
 from sre_agent.core.settings import AgentSettings, get_settings
+from sre_agent.deployment import build_readiness_report
 from sre_agent.monitor.service import MonitorService
 
 
 def _build_runtime_settings(
     container_name: str | None = None,
     since_seconds: int | None = None,
+    autonomous: bool | None = None,
 ) -> AgentSettings:
     settings = get_settings()
     updates: dict[str, object] = {}
@@ -20,6 +23,8 @@ def _build_runtime_settings(
         updates["app_container_names"] = [container_name]
     if since_seconds is not None:
         updates["app_log_since_seconds"] = since_seconds
+    if autonomous is not None:
+        updates["graph_enable_autonomous_loop"] = autonomous
     return settings.model_copy(update=updates) if updates else settings
 
 
@@ -42,8 +47,8 @@ def _print_incident(incident: Incident, diagnosis: ErrorDiagnosis | None) -> Non
             click.echo(f"- {action.action}: {action.status} - {action.summary}")
 
 
-async def _run_monitor(once: bool, iterations: int) -> None:
-    settings = get_settings()
+async def _run_monitor(once: bool, iterations: int, autonomous: bool | None) -> None:
+    settings = _build_runtime_settings(autonomous=autonomous)
     service = MonitorService(settings)
 
     max_runs: int | None
@@ -71,8 +76,12 @@ async def _run_monitor(once: bool, iterations: int) -> None:
         await asyncio.sleep(settings.check_interval_seconds)
 
 
-async def _run_diagnosis(container_name: str | None, since_seconds: int | None) -> None:
-    settings = _build_runtime_settings(container_name, since_seconds)
+async def _run_diagnosis(
+    container_name: str | None,
+    since_seconds: int | None,
+    autonomous: bool | None,
+) -> None:
+    settings = _build_runtime_settings(container_name, since_seconds, autonomous)
     service = MonitorService(settings)
     results = await service.run_cycle(notify=False, remediate=False)
     if not results:
@@ -82,6 +91,23 @@ async def _run_diagnosis(container_name: str | None, since_seconds: int | None) 
         if index > 0:
             click.echo("")
         _print_incident(incident, diagnosis)
+
+
+def _print_readiness(json_output: bool) -> None:
+    """Print the deployment readiness report."""
+
+    report = build_readiness_report(get_settings())
+    if json_output:
+        click.echo(json.dumps(report.model_dump(mode="json"), ensure_ascii=False, indent=2))
+        return
+
+    click.echo(f"Overall: {report.overall_status}")
+    click.echo("Checks:")
+    for check in report.checks:
+        click.echo(f"- [{check.status.upper()}] {check.name}: {check.summary}")
+    click.echo("Sources:")
+    for source in report.sources:
+        click.echo(f"- [{str(source['status']).upper()}] {source['name']}: {source['summary']}")
 
 
 @click.group()
@@ -98,10 +124,15 @@ def cli() -> None:
     show_default=True,
     help="Number of monitoring cycles. 0 means run forever.",
 )
-def monitor_command(once: bool, iterations: int) -> None:
+@click.option(
+    "--autonomous/--no-autonomous",
+    default=None,
+    help="Override the autonomous graph setting for this command.",
+)
+def monitor_command(once: bool, iterations: int, autonomous: bool | None) -> None:
     """Run the monitor loop."""
 
-    asyncio.run(_run_monitor(once, iterations))
+    asyncio.run(_run_monitor(once, iterations, autonomous))
 
 
 @cli.command("diagnose")
@@ -112,10 +143,27 @@ def monitor_command(once: bool, iterations: int) -> None:
     type=int,
     help="Override the log lookback window in seconds.",
 )
-def diagnose_command(container_name: str | None, since_seconds: int | None) -> None:
+@click.option(
+    "--autonomous/--no-autonomous",
+    default=None,
+    help="Override the autonomous graph setting for this command.",
+)
+def diagnose_command(
+    container_name: str | None,
+    since_seconds: int | None,
+    autonomous: bool | None,
+) -> None:
     """Run a single diagnosis cycle."""
 
-    asyncio.run(_run_diagnosis(container_name, since_seconds))
+    asyncio.run(_run_diagnosis(container_name, since_seconds, autonomous))
+
+
+@cli.command("check-deploy")
+@click.option("--json", "json_output", is_flag=True, help="Print JSON output.")
+def check_deploy_command(json_output: bool) -> None:
+    """Print Linux deployment readiness and source availability."""
+
+    _print_readiness(json_output)
 
 
 @cli.command("test-notify")

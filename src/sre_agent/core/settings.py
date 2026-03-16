@@ -40,6 +40,25 @@ class AgentSettings(BaseModel):
     )
     model: str = Field(default="deepseek-chat", alias="MODEL")
     repository_path: str | None = Field(default=None, alias="REPOSITORY_PATH")
+    prometheus_base_url: str | None = Field(default=None, alias="PROMETHEUS_BASE_URL")
+    prometheus_timeout_seconds: int = Field(default=5, alias="PROMETHEUS_TIMEOUT_SECONDS")
+    prometheus_step_seconds: int = Field(default=60, alias="PROMETHEUS_STEP_SECONDS")
+    graph_enable_autonomous_loop: bool = Field(
+        default=False,
+        alias="GRAPH_ENABLE_AUTONOMOUS_LOOP",
+    )
+    graph_max_steps: int = Field(default=4, alias="GRAPH_MAX_STEPS")
+    codebase_path: str | None = Field(default=None, alias="CODEBASE_PATH")
+    codebase_fetch_mode: Literal["local", "git", "disabled"] = Field(
+        default="local",
+        alias="CODEBASE_FETCH_MODE",
+    )
+    codebase_git_url: str | None = Field(default=None, alias="CODEBASE_GIT_URL")
+    codebase_git_branch: str = Field(default="main", alias="CODEBASE_GIT_BRANCH")
+    codebase_cache_path: str = Field(
+        default=".cache/codebase",
+        alias="CODEBASE_CACHE_PATH",
+    )
 
     check_interval_seconds: int = Field(default=60, alias="CHECK_INTERVAL_SECONDS")
     host_disk_path: str = Field(default="/", alias="HOST_DISK_PATH")
@@ -139,3 +158,4 @@ def get_settings() -> AgentSettings:
         payload.update(_read_env_file(candidate))
     payload.update(os.environ)
     return AgentSettings(**payload)
+

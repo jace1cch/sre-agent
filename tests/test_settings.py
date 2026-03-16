@@ -45,3 +45,12 @@ def test_default_model_provider_matches_deepseek() -> None:
     settings = AgentSettings(_env_file=None)
     assert settings.model == "deepseek-chat"
     assert settings.openai_base_url == "https://api.deepseek.com"
+
+
+def test_graph_settings_have_safe_defaults() -> None:
+    """Graph settings default to the safe legacy path."""
+
+    settings = AgentSettings(_env_file=None)
+    assert settings.graph_enable_autonomous_loop is False
+    assert settings.graph_max_steps == 4
+    assert settings.codebase_fetch_mode == "local"

@@ -7,6 +7,8 @@ from pydantic import BaseModel, Field
 
 Severity = Literal["info", "warning", "critical"]
 ActionStatus = Literal["success", "failed", "skipped"]
+SourceTier = Literal["local", "runtime", "external", "optional"]
+SourceState = Literal["available", "degraded", "missing", "unsupported"]
 
 
 class LogEntry(BaseModel):
@@ -31,6 +33,18 @@ class SuggestedFix(BaseModel):
     description: str = Field(description="What the fix involves")
     file_path: str | None = Field(default=None, description="File to modify, if applicable")
     code_snippet: str | None = Field(default=None, description="Example code change")
+
+
+class SourceAvailability(BaseModel):
+    """Availability of one input source."""
+
+    name: str = Field(description="Stable source name")
+    tier: SourceTier = Field(description="Source tier")
+    status: SourceState = Field(description="Current source status")
+    summary: str = Field(description="Short source summary")
+    fallback_group: str | None = Field(default=None, description="Fallback group name")
+    tool_name: str | None = Field(default=None, description="Mapped tool name")
+    details: str | None = Field(default=None, description="Extra source details")
 
 
 class HostSnapshot(BaseModel):
@@ -83,6 +97,10 @@ class EvidenceBundle(BaseModel):
     business_events: list[dict[str, object]] = Field(
         default_factory=list,
         description="Structured business events",
+    )
+    input_sources: list[SourceAvailability] = Field(
+        default_factory=list,
+        description="Input source status for this incident",
     )
 
 

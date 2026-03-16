@@ -11,9 +11,12 @@ except ImportError:
     OpenAIChatModel = None
     OpenAIProvider = None
 
+from sre_agent.core.cycle import AutonomousDiagnosisResult
 from sre_agent.core.models import ErrorDiagnosis, Incident, MonitorFinding, SuggestedFix
 from sre_agent.core.prompts import SYSTEM_PROMPT, build_diagnosis_prompt
 from sre_agent.core.settings import AgentSettings, get_settings
+from sre_agent.graph.workflow import AutonomousWorkflow
+from sre_agent.tools import ToolRegistry, build_default_runtime_tool_registry
 
 
 def create_sre_agent(config: AgentSettings) -> Any:
@@ -79,14 +82,36 @@ def build_fallback_diagnosis(incident: Incident) -> ErrorDiagnosis:
     )
 
 
+async def run_autonomous_diagnosis(
+    incident: Incident,
+    config: AgentSettings | None = None,
+    tool_registry: ToolRegistry | None = None,
+) -> AutonomousDiagnosisResult:
+    """Run the autonomous graph workflow for one incident."""
+
+    if config is None:
+        config = get_settings()
+
+    workflow = AutonomousWorkflow(
+        settings=config,
+        tool_registry=tool_registry or build_default_runtime_tool_registry(config),
+    )
+    return await workflow.ainvoke(incident)
+
+
 async def diagnose_incident(
     incident: Incident,
     config: AgentSettings | None = None,
+    tool_registry: ToolRegistry | None = None,
 ) -> ErrorDiagnosis:
     """Run a diagnosis for a structured incident."""
 
     if config is None:
         config = get_settings()
+
+    if config.graph_enable_autonomous_loop:
+        result = await run_autonomous_diagnosis(incident, config, tool_registry=tool_registry)
+        return result.diagnosis
 
     if not config.openai_api_key or PydanticAgent is None:
         return build_fallback_diagnosis(incident)

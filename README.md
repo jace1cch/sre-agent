@@ -1,4 +1,4 @@
-﻿# SRE Agent 中文说明
+# SRE Agent 中文说明
 
 这是一个面向单机 Linux 服务器的轻量运维 Agent，当前版本专门针对你的目标场景进行了收敛：
 
@@ -150,7 +150,7 @@ cp deploy/examples/tencent-cloud-cvm-2c2g.env .env
 - `LOG_CLEAN_PATHS`
 - `OPENAI_API_KEY`，用于 DeepSeek OpenAI 兼容接口
 
-### 5. 跑一次单次诊断
+### 5. 先跑部署就绪检查`r`n`r`n```bash`r`nPYTHONPATH=src python -m sre_agent.cli.main check-deploy`r`n``` `r`n`r`n这个命令会直接告诉你：`r`n`r`n- 当前是不是 Linux 服务器环境`r`n- Docker 和 Docker daemon 是否可用`r`n- 配置的容器是否能被 Agent 看到`r`n- 当前 autonomous 模式是否启用`r`n- 哪些输入来源可用，哪些会降级或缺失`r`n`r`n### 6. 跑一次单次诊断
 
 ```bash
 PYTHONPATH=src python -m sre_agent.run
@@ -158,19 +158,19 @@ PYTHONPATH=src python -m sre_agent.run
 
 如果当前没有异常，输出 `No issues detected.` 是正常现象。
 
-### 6. 跑一次巡检
+### 7. 跑一次巡检
 
 ```bash
 PYTHONPATH=src python -m sre_agent.cli.main monitor --once
 ```
 
-### 7. 持续运行巡检
+### 8. 持续运行巡检
 
 ```bash
 PYTHONPATH=src python -m sre_agent.cli.main monitor
 ```
 
-### 8. 测试通知
+### 9. 测试通知
 
 ```bash
 PYTHONPATH=src python -m sre_agent.cli.main test-notify --message "sre agent test"
